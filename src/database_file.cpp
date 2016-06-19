@@ -30,6 +30,10 @@ along with libkeepass2pp.  If not, see <http://www.gnu.org/licenses/>.
 
 namespace Kdbx{
 
+const std::array<uint8_t, 16> Database::File::AES_CBC_256_UUID = {0x31, 0xC1, 0xF2, 0xE6, 0xBF, 0x71, 0x43, 0x50,
+                                                                  0xBE, 0x58, 0x05, 0x21, 0x6A, 0xFC, 0x5A, 0xFF };
+
+
 const char* const Database::Version::titleString = "Title";
 const char* const Database::Version::userNameString = "UserName";
 const char* const Database::Version::passwordString = "Password";
@@ -43,7 +47,11 @@ public:
     class Binary;
     class Binaries;
 
-    Database::Settings settings;
+    inline Meta()
+        :settings(new Database::Settings())
+    {}
+
+    Database::Settings::Ptr settings;
     std::array<uint8_t, 32> headerHash; // ToDo is this how it works?
     CustomIcons customIcons;
     std::map<std::string, std::string> customData;
@@ -103,8 +111,6 @@ static const uint32_t FileSignatureOld2 = 0xB54BFB65;
 static const uint32_t FileSignaturePreRelease1 = 0x9AA2D903;
 static const uint32_t FileSignaturePreRelease2 = 0xB54BFB66;
 
-static const std::array<uint8_t, 16> aesUUID = {0x31, 0xC1, 0xF2, 0xE6, 0xBF, 0x71, 0x43, 0x50,
-                                                0xBE, 0x58, 0x05, 0x21, 0x6A, 0xFC, 0x5A, 0xFF };
 namespace String{
 
 static constexpr char DocNode[] = "KeePassFile";
@@ -1283,49 +1289,49 @@ public:
         std::string localName = reader.localName();
         // ToDo: headerHash field!!!
         if (localName == String::DbName){
-            data.settings.databaseName = parse<std::string>(reader);
+            data.settings->databaseName = parse<std::string>(reader);
         }else if (localName == String::DbNameChanged){
-            data.settings.databaseNameChanged = parse<Time>(reader);
+            data.settings->databaseNameChanged = parse<Time>(reader);
         }else if (localName == String::DbDesc){
-            data.settings.databaseDescription = parse<std::string>(reader);
+            data.settings->databaseDescription = parse<std::string>(reader);
         }else if (localName == String::DbDescChanged){
-            data.settings.databaseDescriptionChanged = parse<Time>(reader);
+            data.settings->databaseDescriptionChanged = parse<Time>(reader);
         }else if (localName == String::DbDefaultUser){
-            data.settings.defaultUsername = parse<std::string>(reader);
+            data.settings->defaultUsername = parse<std::string>(reader);
         }else if (localName == String::DbDefaultUserChanged){
-            data.settings.defaultUsernameChanged = parse<Time>(reader);
+            data.settings->defaultUsernameChanged = parse<Time>(reader);
         }else if (localName == String::DbMntncHistoryDays){
-            data.settings.maintenanceHistoryDays = parse<int>(reader);
+            data.settings->maintenanceHistoryDays = parse<int>(reader);
         }else if (localName == String::DbColor){
-            data.settings.color = parse<std::string>(reader);
+            data.settings->color = parse<std::string>(reader);
         }else if (localName == String::DbKeyChanged){
-            data.settings.masterKeyChanged = parse<Time>(reader);
+            data.settings->masterKeyChanged = parse<Time>(reader);
         }else if (localName == String::DbKeyChangeRec){
-            data.settings.masterKeyChangeRec = parse<int64_t>(reader);
+            data.settings->masterKeyChangeRec = parse<int64_t>(reader);
         }else if (localName == String::DbKeyChangeForce){
-            data.settings.masterKeyChangeForce = parse<int64_t>(reader);
+            data.settings->masterKeyChangeForce = parse<int64_t>(reader);
         }else if (localName == String::MemoryProt){
-            data.settings.memoryProtection = parse<MemoryProtectionFlags>(reader);
+            data.settings->memoryProtection = parse<MemoryProtectionFlags>(reader);
         }else if (localName == String::CustomIcons){
             data.customIcons = parse<CustomIcons>(reader);
         }else if (localName == String::RecycleBinEnabled){
-            data.settings.recycleBinEnabled = parse<bool>(reader);
+            data.settings->recycleBinEnabled = parse<bool>(reader);
         }else if (localName == String::RecycleBinUuid){
-            data.settings.recycleBinUUID = parse<Uuid>(reader);
+            data.settings->recycleBinUUID = parse<Uuid>(reader);
         }else if (localName == String::RecycleBinChanged){
-            data.settings.recycleBinChanged = parse<Time>(reader);
+            data.settings->recycleBinChanged = parse<Time>(reader);
         }else if (localName == String::EntryTemplatesGroup){
-            data.settings.entryTemplatesGroup = parse<Uuid>(reader);
+            data.settings->entryTemplatesGroup = parse<Uuid>(reader);
         }else if (localName == String::EntryTemplatesGroupChanged){
-            data.settings.entryTemplatesGroupChanged = parse<Time>(reader);
+            data.settings->entryTemplatesGroupChanged = parse<Time>(reader);
         }else if (localName == String::HistoryMaxItems){
-            data.settings.historyMaxItems = parse<int>(reader);
+            data.settings->historyMaxItems = parse<int>(reader);
         }else if (localName == String::HistoryMaxSize){
-            data.settings.historyMaxSize = parse<int64_t>(reader);
+            data.settings->historyMaxSize = parse<int64_t>(reader);
         }else if (localName == String::LastSelectedGroup){
-            data.settings.lastSelectedGroup = parse<Uuid>(reader);
+            data.settings->lastSelectedGroup = parse<Uuid>(reader);
         }else if (localName == String::LastTopVisibleGroup){
-            data.settings.lastTopVisibleGroup = parse<Uuid>(reader);
+            data.settings->lastTopVisibleGroup = parse<Uuid>(reader);
         }else if (localName == String::Binaries){
             auto tmp = parse<Database::Meta::Binaries>(reader);
             using std::swap;
@@ -1748,25 +1754,25 @@ public:
             data->fuuid = parse<Uuid>(reader);
             haveUuid = true;
         } else if (localName == String::Name){
-            data->fproperties.name = parse<std::string>(reader);
+            data->fproperties->name = parse<std::string>(reader);
         } else if (localName == String::Notes){
-            data->fproperties.notes = parse<std::string>(reader);
+            data->fproperties->notes = parse<std::string>(reader);
         } else if (localName == String::Icon){
             standardIcon = StandardIcon(parse<int>(reader));
         } else if (localName == String::CustomIconID){
             customIcon = parse<Uuid>(reader);
         } else if (localName == String::Times){
-            data->fproperties.times = parse<Times>(reader);
+            data->fproperties->times = parse<Times>(reader);
         } else if (localName == String::IsExpanded){
-            data->fproperties.isExpanded = parse<bool>(reader);
+            data->fproperties->isExpanded = parse<bool>(reader);
         } else if (localName == String::GroupDefaultAutoTypeSeq){
-            data->fproperties.defaultAutoTypeSequence = parse<std::string>(reader);
+            data->fproperties->defaultAutoTypeSequence = parse<std::string>(reader);
         } else if (localName == String::EnableAutoType){
-            data->fproperties.enableAutoType = parse<bool>(reader);
+            data->fproperties->enableAutoType = parse<bool>(reader);
         } else if (localName == String::EnableSearching){
-            data->fproperties.enableSearching = parse<bool>(reader);
+            data->fproperties->enableSearching = parse<bool>(reader);
         } else if (localName == String::LastTopVisibleEntry){
-            data->fproperties.lastTopVisibleEntry = parse<Uuid>(reader);
+            data->fproperties->lastTopVisibleEntry = parse<Uuid>(reader);
         } else if (localName == String::Group){
             data->fgroups.push_back(parse<Database::Group>(reader, meta, data.get()));
         } else if (localName == String::Entry){
@@ -1785,35 +1791,35 @@ public:
         if (customIcon != Uuid::nil()){
             for (const CustomIcon::Ptr& icon: meta.customIcons){
                 if(icon->uuid() == customIcon){
-                    data->fproperties.icon = Icon(icon);
+                    data->fproperties->icon = Icon(icon);
                     return std::move(data);
                 }
             }
         }
 
-        data->fproperties.icon = Icon(standardIcon);
+        data->fproperties->icon = Icon(standardIcon);
         return std::move(data);
     }
 
     static void writeOld(XmlWriter& writer, const Database::Group* data){
         writer.writeElement(String::Uuid, data->fuuid);
-        writer.writeElement(String::Name, data->fproperties.name );
-        writer.writeElement(String::Notes, data->fproperties.notes );
+        writer.writeElement(String::Name, data->fproperties->name );
+        writer.writeElement(String::Notes, data->fproperties->notes );
 
-        if (data->fproperties.icon.type() == Icon::Type::Custom){
+        if (data->fproperties->icon.type() == Icon::Type::Custom){
             writer.writeElement(String::Icon, int(StandardIcon::Folder));
-            writer.writeElement(String::CustomIconID, data->fproperties.icon.custom()->uuid());
-        }else if (data->fproperties.icon.type() == Icon::Type::Standard){
-            writer.writeElement(String::Icon, int(data->fproperties.icon.standard()));
+            writer.writeElement(String::CustomIconID, data->fproperties->icon.custom()->uuid());
+        }else if (data->fproperties->icon.type() == Icon::Type::Standard){
+            writer.writeElement(String::Icon, int(data->fproperties->icon.standard()));
         }else{
             writer.writeElement(String::Icon, int(StandardIcon::Folder));
         }
-        writer.writeElement<Times>(String::Times, data->fproperties.times);
-        writer.writeElement(String::IsExpanded, data->fproperties.isExpanded);
-        writer.writeElement(String::GroupDefaultAutoTypeSeq, data->fproperties.defaultAutoTypeSequence);
-        writer.writeElement(String::EnableAutoType, data->fproperties.enableAutoType);
-        writer.writeElement(String::EnableSearching, data->fproperties.enableSearching);
-        writer.writeElement(String::LastTopVisibleEntry, data->fproperties.lastTopVisibleEntry);
+        writer.writeElement<Times>(String::Times, data->fproperties->times);
+        writer.writeElement(String::IsExpanded, data->fproperties->isExpanded);
+        writer.writeElement(String::GroupDefaultAutoTypeSeq, data->fproperties->defaultAutoTypeSequence);
+        writer.writeElement(String::EnableAutoType, data->fproperties->enableAutoType);
+        writer.writeElement(String::EnableSearching, data->fproperties->enableSearching);
+        writer.writeElement(String::LastTopVisibleEntry, data->fproperties->lastTopVisibleEntry);
         for (const Database::Group::Ptr& item: data->fgroups){
             writer.writeElement<Database::Group>(String::Group, item.get());
         }
@@ -2044,7 +2050,7 @@ static void writeHeader(OSSL::Digest& d, std::ostream* file, Internal::HeaderFie
     d.update(data, size);
 }
 
-std::future<void> Database::saveToFile(std::unique_ptr<std::ostream> file, const CompositeKey& key, const File::Settings& settings) const{
+std::future<std::unique_ptr<std::ostream>> Database::saveToFile(std::unique_ptr<std::ostream> file, const CompositeKey& key, const File::Settings& settings) const{
     using namespace Internal;
     file->exceptions ( std::istream::failbit | std::istream::badbit | std::istream::eofbit );
 
@@ -2084,8 +2090,8 @@ std::future<void> Database::saveToFile(std::unique_ptr<std::ostream> file, const
     }
 
     if (settings.encrypt){
-        auto match = std::mismatch(settings.cipherId.begin(), settings.cipherId.end(), aesUUID.begin());
-        if (match != std::make_pair(settings.cipherId.end(), aesUUID.end())){
+        auto match = std::mismatch(settings.cipherId.begin(), settings.cipherId.end(), File::AES_CBC_256_UUID.begin());
+        if (match != std::make_pair(settings.cipherId.end(), File::AES_CBC_256_UUID.end())){
             std::ostringstream s;
             s << "Unsupported cipher UUID: ";
             outHex(s, settings.cipherId);
@@ -2136,7 +2142,7 @@ std::future<void> Database::saveToFile(std::unique_ptr<std::ostream> file, const
     pipeline.setStart(std::move(writer));
 
     std::unique_ptr<OStreamLink> finish(new OStreamLink(std::move(file)));
-    std::future<void> result = finish->getFuture();
+    std::future<std::unique_ptr<std::ostream>> result = finish->getFuture();
     pipeline.setFinish(std::move(finish));
 
 
@@ -2145,7 +2151,7 @@ std::future<void> Database::saveToFile(std::unique_ptr<std::ostream> file, const
     return result;
 }
 
-std::future<void> Database::saveToXmlFile(std::unique_ptr<std::ostream> file) const{
+std::future<std::unique_ptr<std::ostream>> Database::saveToXmlFile(std::unique_ptr<std::ostream> file) const{
     using namespace Internal;
 
     Pipeline pipeline;
@@ -2154,7 +2160,7 @@ std::future<void> Database::saveToXmlFile(std::unique_ptr<std::ostream> file) co
     pipeline.setStart(std::move(writer));
 
     std::unique_ptr<OStreamLink> finish(new OStreamLink(std::move(file)));
-    std::future<void> result = finish->getFuture();
+    std::future<std::unique_ptr<std::ostream>> result = finish->getFuture();
     pipeline.setFinish(std::move(finish));
     pipeline.run();
     return result;
@@ -2295,8 +2301,8 @@ Database::File Database::loadFromFile(std::unique_ptr<std::istream> file){
                 !haveField.test(int(HeaderFieldId::TransformRounds)))
             throw std::runtime_error("Necesary header fields missing.");
 
-        auto match = std::mismatch(result.settings.cipherId.begin(), result.settings.cipherId.end(), aesUUID.begin());
-        if (match != std::make_pair(result.settings.cipherId.end(), aesUUID.end())){
+        auto match = std::mismatch(result.settings.cipherId.begin(), result.settings.cipherId.end(), File::AES_CBC_256_UUID.begin());
+        if (match != std::make_pair(result.settings.cipherId.end(), File::AES_CBC_256_UUID.end())){
             std::ostringstream s;
             s << "Unsupported cipher UUID: ";
             outHex(s, result.settings.cipherId);

@@ -179,8 +179,8 @@ void Database::Group::addEntry(Entry::Ptr entry, size_t index, BasicDatabaseMode
 Database::Group::Group(const Group& group)
     :fparent(nullptr),
       fdatabase(nullptr),
-      fuuid(Uuid::generate()), // ToDo: uuid re-generation?
-      fproperties(group.fproperties)
+      fuuid(Uuid::generate()),
+      fproperties(new Properties(*group.fproperties))
 {
     fentries.reserve(group.fentries.size());
     for (const Entry::Ptr& entry: group.fentries){
@@ -250,6 +250,7 @@ Database::Group::Ptr Database::Group::takeGroup(size_t index) noexcept{
 }
 
 void Database::Group::addEntry(Entry::Ptr entry, size_t index){
+    entry->fparent = this;
     if (fdatabase)
         entry->setDatabase(fdatabase);
     fentries.insert(fentries.begin()+index, std::move(entry));
@@ -257,9 +258,11 @@ void Database::Group::addEntry(Entry::Ptr entry, size_t index){
 
 Database::Entry::Ptr Database::Group::takeEntry(size_t index) noexcept{
     Entry::Ptr result(std::move(fentries.at(index)));
+    result->fparent = nullptr;
     fentries.erase(fentries.begin()+ index);
     if (fdatabase)
         result->clearDatabase(fdatabase);
+
     return result;
 }
 
@@ -267,8 +270,17 @@ Database::Entry::Ptr Database::Group::takeEntry(size_t index) noexcept{
 //-------------------------------------------------------------------------------------
 
 Database::Database()
-    :froot(new Group(this))
-{}
+    :froot(new Group(this)),
+      fsettings(new Settings())
+{
+    std::time_t currentTime=time(nullptr);
+    fsettings->databaseNameChanged = currentTime;
+    fsettings->databaseDescriptionChanged = currentTime;
+    fsettings->defaultUsernameChanged = currentTime;
+    fsettings->masterKeyChanged = currentTime;
+    fsettings->recycleBinChanged = currentTime;
+    fsettings->entryTemplatesGroupChanged = currentTime;
+}
 
 int Database::customIconIndex(const Uuid& uuid) const noexcept{
     for (unsigned int i=0; i<fcustomIcons.size(); ++i){

@@ -37,13 +37,10 @@ IStreamLink::IStreamLink(const std::string& filename) noexcept
 void IStreamLink::runThread(){
     ffile->exceptions ( std::istream::badbit );
 
-//    std::size_t readBytes = 0;
-
     Pipeline::BufferPtr buffer;
     while (*ffile){
         buffer = Pipeline::BufferPtr(new Pipeline::Buffer());
         ffile->read(reinterpret_cast<char*>(buffer->data().data()), maxFill());
-//        readBytes += ffile->gcount();
         if (!ffile->gcount()){
             break;
         }
@@ -51,7 +48,6 @@ void IStreamLink::runThread(){
         write(std::move(buffer));
     }
 
-//    std::cout << "Read bytes: " << readBytes << std::endl;
     finish();
 }
 
@@ -68,7 +64,7 @@ void OStreamLink::runThread(){
             ffile->write(reinterpret_cast<const char*>(inBuffer->data().data()), inBuffer->size());
         }
         ffile->flush();
-        finished.set_value();
+        finished.set_value(std::move(ffile));
     }catch(...){
         finished.set_exception(std::current_exception());
         throw;

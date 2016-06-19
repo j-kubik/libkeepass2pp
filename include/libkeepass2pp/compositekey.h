@@ -25,6 +25,19 @@ along with libkeepass2pp.  If not, see <http://www.gnu.org/licenses/>.
 
 namespace Kdbx{
 
+/**
+ * @brief The CompositeKey class represents a key that is composed of several components.
+ *
+ * Those components can be:
+ *  - a password;
+ *  - a key file;
+ *  - Windows user account (on windows platforms) - currently unsupported.
+ *
+ * Separate keys are added to the composite key. They are combined when requested using
+ *  getCompositeKey method.
+ */
+
+//ToDo: use safe vectors here!!!
 class CompositeKey{
 public:
 

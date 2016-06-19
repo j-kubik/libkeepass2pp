@@ -98,6 +98,19 @@ public:
           usageCount(0),
           locationChanged(0)
     {}
+
+    /**
+     * @brief Creates a current Times structure.
+     * Iy has all fields set to 0, except for \p creation, \p lastModification and
+     * \p lastAccess that are set to current time (as reported by \p time() function).
+     */
+    static Times nowTimes() noexcept{
+        Times result;
+        result.creation = time(nullptr);
+        result.lastModification = result.creation;
+        result.lastAccess = result.creation;
+        return result;
+    }
 };
 
 class CompositeKey;
@@ -130,12 +143,128 @@ public:
     class Group;
     class Meta;
 
+    /** @brief File class represents a partialy open KDBX file.
+     *
+     * It is used to stroe basic configuration parameters that are read from KDBX file
+     * and are necesary in order to decrypt it. Those paramaters are split into
+     * Settings and random parameters. Settings are user-accessible parameters
+     * describing how database is to be serialized. Random paramaters are buffers
+     * of random bytes used in cryptographic process. Those buffers are not preserved
+     * between deserialization and serialization of database. Each time database is
+     * serialized, cryptografic RNG is used to generate new contents of those buffers.
+     */
+    class File{
+    public:
+        /** @brief Compression algorithm to use.
+         *
+         * KDBX format currently supports only gzip compression or no compression.
+         */
+        enum class CompressionAlgorithm: uint32_t
+        {
+            /// No compression.
+            None = 0,
+
+            /// GZip compression.
+            GZip = 1,
+
+            Count = 2
+        };
+
+        static const std::array<uint8_t, 16> AES_CBC_256_UUID;
+
+        /** @brief Settings is a structure that groups together user accesible Settings
+         *         that are used when serializing and deserializing a database.
+         */
+        struct Settings{
+            /** @brief Unique, owning pointer to a Settings object.*/
+            typedef std::unique_ptr<Settings> Ptr;
+
+            bool encrypt; //! Whether database is to be encrypted.
+                          //! This filed only indicates if all expected fields
+                          //! were found in the header. If false, \p cipherId field
+                          //! and all fields concerning compression are to be ignored.
+            bool compress; //! Whether database is to be compressed.
+                           //! This filed only indicates if CompressionAlgorithm field
+                           //! was found in the header. If false, \p compression field
+                           //! is to be ignored.
+            std::array<uint8_t, 16> cipherId; //! Compression sheme to use.
+                                              //! Currently KDBX format only supports
+                                              //! AES 256 CBC encryption.
+            uint64_t transformRounds; //! Password transformation rounds to be applied.
+            KdbxRandomStream::Algorithm crsAlgorithm; //! Random stream algorithm to be
+                                                      //! used. This random stream is
+                                                      //! used for additional
+                                                      //! protection of sensitive data
+                                                      //! inside the stream.
+            CompressionAlgorithm compression; //! Compression algorithm to be used.
+
+            /** @brief Constructs default Settings structure. Default values are:
+             *  - encrypt and compress are set to true;
+             *  - transformRounds is set to 5000;
+             *  - crsAlgorithm is set to KdbxRandomStream::Algorithm::Salsa20;
+             *  - compression is set to CompressionAlgorithm::GZip;
+             *  - cipherId is set to AES_CBC_256_UUID.
+             */
+            inline Settings() noexcept
+                :encrypt(true),
+                  compress(true),
+                  cipherId(AES_CBC_256_UUID),
+                  transformRounds(5000),
+                  crsAlgorithm(KdbxRandomStream::Algorithm::Salsa20),
+                  compression(CompressionAlgorithm::GZip)
+            {}
+
+        };
+
+    private:
+        std::unique_ptr<std::istream> ffile;
+
+        std::array<uint8_t, 32> masterSeed;
+        std::array<uint8_t, 32> transformSeed;
+        std::array<uint8_t, 16> encryptionIV;
+        std::array<uint8_t, 32> streamStartBytes;
+
+        std::vector<uint8_t> protectedStreamKey; // what is this?
+
+
+    public:
+        Settings settings; //! Settings object used during deserialization
+                           //! (see getDatabase()).
+
+        /** @brief Returns \p true if a proper composite key is required in order to
+         *         properly deserialize a database.
+         */
+        bool needsKey();
+
+        /** @brief Initializes deserialization process.
+         * @param key CompositeKey that is used in order to decrypt datbase.
+         *        The key might not be necesary (in which case this parameter is
+         *        ignored); use needsKey() in order to determine wheter a key is
+         *        required.
+         * @return std::future object that gets an owning pointer to database
+         *         as its value.
+         *
+         * This method starts deserialization process asynchronously. Returned
+         * std::future can be used to determine wheter a deserialized database is
+         * ready. If deserialization was interrupted by an error, returned future
+         * object will throw an apropriate exception in \p get() method.
+         */
+        std::future<Database::Ptr> getDatabase(const CompositeKey& key);
+
+        friend class Database;
+    };
+
     /** @brief Global database settings.
      *
      * This class is storing database global settings.
+     *
+     * @note ToDo: add methods setting values that update timestamps for
+     *       thse actions.
      */
     class Settings{
     public:
+        /** @brief Unique, owning pointer to a Settings object.*/
+        typedef std::unique_ptr<Settings> Ptr;
 
         /** @brief Constructs uninitilized settings objects.
          *
@@ -159,7 +288,7 @@ public:
          *
          * Default values are:
          *  - databaseName, databaseDescription, defaultUsername and color are set
-         *    to empyt strings.
+         *    to empty strings.
          *  - databaseNameChanged, databaseDescriptionChanged, defaultUsernameChanged,
          *    masterKeyChanged, recycleBinChanged and entryTemplatesGroupChanged are
          *    set to 0;
@@ -189,7 +318,7 @@ public:
 
         Settings(Settings&&) = default;
         Settings& operator=(Settings&&) = default;
-        Settings(const Settings&) = delete;
+        Settings(const Settings&) = default;
 
         std::string databaseName;
         std::string databaseDescription;
@@ -261,21 +390,22 @@ public:
          * database.
          *
          * All public fields of created version object are default-initialized,
-         * except icon, that is set to Kdbx::StandardIcon::Key standard icon.
-         *
+         * except icon, that is set to Kdbx::StandardIcon::Key standard icon, and
+         * times that are set to Times::nowTimes().
          */
         inline Version() noexcept
             :fparent(0),
-              icon(StandardIcon::Key)
+              icon(StandardIcon::Key),
+              times(Times::nowTimes())
         {}
 
         /**
          * @brief Copy constructor for a Version object.
          *
-         * Constructed object contains copies of all public variables of object
+         * Constructed object contains copies of all public variables of object \p
          * v, but it doesn't belong to any entry.
          *
-         * @note Version that doesn't beling to any entry cannot belong to a group
+         * @note Version that doesn't belong to any entry cannot belong to a group
          *       or a database.
          */
         inline Version(const Version& v)
@@ -432,7 +562,7 @@ public:
      * @brief The Entry class represents a database entry.
      *
      * It can be owned by at most one group at a time, and it must own at least
-     * one Version object. Every entry holds internal vector of pointers to owned
+     * one Version object. Every entry holds internal list of pointers to owned
      * Version objects.
      *
      * Version object at the last position in an entry  is considered latest.
@@ -803,9 +933,71 @@ public:
         friend class BasicDatabaseModel;
     };
 
+    /**
+     * @brief The Group class represents a database directory.
+     *
+     * It can be owned by at most one group at a time, and it can own any number
+     * of groups (called here subgroups) and any number of entries. Every group
+     * holds 2 internal lists: one containing pointers to owned groups, and one
+     * containing pointers to owned entries.
+     */
     class Group{
     public:
+        /**
+         * @brief Ptr is an unique owning pointer to a Group object.
+         *
+         * It releases pointed object when it goes out of scope.
+         */
         typedef std::unique_ptr<Group> Ptr;
+
+        /** @brief Group properties.
+         *
+         * This structure is used to describe user-visible properties of a group.
+         */
+        class Properties{
+        public:
+            typedef std::unique_ptr<Properties> Ptr;
+
+            std::string name;
+            std::string notes;
+            std::string defaultAutoTypeSequence;
+            Icon icon;
+            Times times;
+            Uuid lastTopVisibleEntry;
+            bool isExpanded;
+            bool enableAutoType;
+            bool enableSearching;
+
+            /** @brief Constructs uninitilized properties objects.
+             *
+             * Field of constructed object are default-initialized.
+             * This means that entries of the structure are not set to any specific
+             * values (except name, notes and defaultAutoTypeSequence, wchich are
+             * empty strings).
+             *
+             * This constructor is useful if fields are to be
+             * assigned directly after construction anyway.
+             */
+            inline Properties(DoNotInitEnum val) noexcept
+                :times(val),
+                  lastTopVisibleEntry(val)
+            {}
+
+            /** @brief Creates default group properieties.
+             *
+             * Default group properties are:
+             *   - name, notes and defaultAutoTypeSequence are empty.
+             *   - icon is set to StandardIcon::Folder
+             *   - isExpanded, enableAutoType and enableSearching are set to true.
+             */
+            inline Properties() noexcept
+                :icon(StandardIcon::Folder),
+                   lastTopVisibleEntry(Uuid::nil()),
+                   isExpanded(true),
+                   enableAutoType(true),
+                   enableSearching(true)
+            {}
+        };
 
     private:
 
@@ -845,7 +1037,8 @@ public:
         inline Group(Group* parent) noexcept
             :fparent(parent),
               fdatabase(parent->fdatabase),
-              fuuid(DoNotInit)
+              fuuid(DoNotInit),
+              fproperties(new Properties())
         {}
 
         /** @brief Internal constructor. Constructs an empty group.
@@ -857,7 +1050,8 @@ public:
         inline Group(Database* database) noexcept
             :fparent(nullptr),
               fdatabase(database),
-              fuuid(DoNotInit)
+              fuuid(DoNotInit),
+              fproperties(new Properties())
         {}
 
         /** @brief Internal method that looks up a group in groups owned by this
@@ -913,53 +1107,6 @@ public:
 
     public:
 
-        /** @brief Group properties.
-         *
-         * This structure is used to describe user-visible properties of a group.
-         */
-        class Properties{
-        public:
-            std::string name;
-            std::string notes;
-            std::string defaultAutoTypeSequence;
-            Icon icon;
-            Times times;
-            Uuid lastTopVisibleEntry;
-            bool isExpanded;
-            bool enableAutoType;
-            bool enableSearching;
-
-            /** @brief Constructs uninitilized properties objects.
-             *
-             * Field of constructed object are default-initialized.
-             * This means that entries of the structure are not set to any specific
-             * values (except name, notes and defaultAutoTypeSequence, wchich are
-             * empty strings).
-             *
-             * This constructor is useful if fields are to be
-             * assigned directly after construction anyway.
-             */
-            inline Properties(DoNotInitEnum val) noexcept
-                :times(val),
-                  lastTopVisibleEntry(val)
-            {}
-
-            /** @brief Creates default group properieties.
-             *
-             * Default group properties are:
-             *   - name, notes and defaultAutoTypeSequence are empty.
-             *   - icon is set to StandardIcon::Folder
-             *   - isExpanded, enableAutoType and enableSearching are set to true.
-             */
-            inline Properties() noexcept
-                :icon(StandardIcon::Folder),
-                   lastTopVisibleEntry(Uuid::nil()),
-                   isExpanded(true),
-                   enableAutoType(true),
-                   enableSearching(true)
-            {}
-        };
-
         /** @brief Constructs an empty group.
          *
          * Constructed group belongs to no database and has no parent
@@ -969,7 +1116,8 @@ public:
         inline Group(Uuid uuid = Uuid::generate()) noexcept
             :fparent(nullptr),
               fdatabase(nullptr),
-              fuuid(std::move(uuid))
+              fuuid(std::move(uuid)),
+              fproperties(new Properties())
         {}
 
         /**
@@ -990,18 +1138,26 @@ public:
          */
         const Uuid& uuid() const noexcept{ return fuuid; }
 
-        //ToDo: properties as a pointer? The structure is not-small...
         /**
          * @brief Properties of a group.
          */
-        const Properties& properties() const noexcept{ return fproperties; }
+        const Properties& properties() const noexcept{ return *fproperties.get(); }
+
+        /**
+         * @brief Properties of a group.
+         */
+        Properties& properties() noexcept{ return *fproperties.get(); }
+
 
         /**
          * @brief Replaces properties of a group with a copy of provided object.
-         * @param properties New properties of a group.
+         * @param properties New properties of a group. This pointer cannot be nullptr.
+         * @return Pointer to old properties object. This pointer is never nullptr.
          */
-        inline void setProperties(const Properties& properties){
-            fproperties = properties;
+        inline Properties::Ptr setProperties(Properties::Ptr properties){
+            using std::swap;
+            swap(fproperties, properties);
+            return properties;
         }
 
         /**
@@ -1130,7 +1286,7 @@ public:
         }
 
         /**
-         * @brief Returns subgroup with specified UUID.
+         * @brief Returns a subgroup with specified UUID.
          * @param uuid UUID of a group object to retrieve.
          *
          * @return Group with specified UUID or nullptr if no such group exists.
@@ -1143,7 +1299,7 @@ public:
         }
 
         /**
-         * @brief Returns subgroup with specified UUID.
+         * @brief Returns a subgroup with specified UUID.
          * @param uuid UUID of a group object to retrieve.
          *
          * @return Group with specified UUID or nullptr if no such group exists.
@@ -1155,55 +1311,155 @@ public:
             return groupLookup(uuid);
         }
 
+        /** @brief Adds a new subgroup to current group.
+         * @param group Owning pointer to a group object. This pointer cannot be nullptr.
+         * @param index Position at which new subgroup should be inserted into internal subgroup list.
+         *        Valid values are [0, groups()].
+         */
         void addGroup(Group::Ptr group, size_t index);
 
+        /** @brief Consructs a new Group and adds it as a subgroup to current gorup.
+         * @param index Position at which new subgroup should be inserted into internal subgroup list.
+         *        Valid values are [0, groups()].
+         * @return Non-owning pointer to newly created group.
+         */
         Group* addGroup(size_t index);
 
+        /** @brief Removes a subgroup and returns ownership of it to the caller.
+         * @param index Position of a group (in internal subgroup list) that is to be
+         *        removed.
+         * @return An owning pointer to removed group.
+         *
+         * Returned group belongs to no database and has no parent group.
+         */
         Group::Ptr takeGroup(size_t index) noexcept;
 
+        /** @brief Removes a subgroup and returns ownership of it to the caller.
+         * @param group Non-owning pointer to the subgroup to be removed. This pointer cannot be nullptr.
+         *
+         * Returned group belongs to no database and has no parent group.
+         * If \p group is not directly owned by current group, result is undefined behavior.
+         */
         inline Group::Ptr takeGroup(const Group* group) noexcept{
             return takeGroup(index(group));
         }
 
+        /** @brief Removes a subgroup and destroys it.
+         * @param index Position of a group (in internal subgroup list) that is to be
+         *        removed and deleted.
+         */
         inline void removeGroup(size_t index) noexcept{
             takeGroup(index);
         }
 
+        /** @brief Removes a subgroup and destroys it.
+         * @param group Non-owning pointer to the subgroup to be removed. This pointer cannot be nullptr.
+         *
+         * If \p group is not directly owned by current group, result is undefined behavior.
+         */
         inline void removeGroup(const Group* group) noexcept{
             takeGroup(index(group));
         }
 
+        /** @brief Number of subgroup in this group.
+         */
         inline size_t entries() const noexcept{
             return fentries.size();
         }
 
+        /**
+         * @brief Returns an entry at specified index.
+         * @param index Index of an entry object to retrieve. Valid indexes are in [0, entries()).
+         *
+         * @return Pointer to an entry object. This method never returns nullptr.
+         *
+         * If specified index is outside valid range, it results in undefined behavior.
+         */
         inline const Entry* entry(size_t index) const noexcept{
             return fentries.at(index).get();
         }
 
+        /**
+         * @brief Returns an entry at specified index.
+         * @param index Index of an entry object to retrieve. Valid indexes are in [0, entries()).
+         *
+         * @return Pointer to an entry object. This method never returns nullptr.
+         *
+         * If specified index is outside valid range, it results in undefined behavior.
+         */
         inline Entry* entry(size_t index) noexcept{
             return fentries.at(index).get();
         }
 
+        /**
+         * @brief Returns an entry with specified UUID.
+         * @param uuid UUID of an entry object to retrieve.
+         *
+         * @return Pointer to an entry object with specified UUID or nullptr if no such
+         *         entry exists.
+         *
+         * This method searches through entire subtree rooted at this group, not just
+         * entries owned directly by it.
+         */
         inline Entry* entry(const Uuid& uuid) noexcept{
             return entryLookup(uuid);
         }
 
+        /**
+         * @brief Returns an entry with specified UUID.
+         * @param uuid UUID of an entry object to retrieve.
+         *
+         * @return Pointer to an entry object with specified UUID or nullptr if no such
+         *         entry exists.
+         *
+         * This method searches through entire subtree rooted at this group, not just
+         * entries owned directly by it.
+         */
         inline const Entry* entry(const Uuid& uuid) const noexcept{
             return entryLookup(uuid);
         }
 
+
+        /** @brief Adds a new entry to current group.
+         * @param group Owning pointer to an entry object. This pointer cannot be nullptr.
+         * @param index Position at which new entry should be inserted into internal entry list.
+         *        Valid values are [0, entries()].
+         */
         void addEntry(Entry::Ptr entry, size_t index);
+
+        /** @brief Removes an entry owned by this group and returns ownership of it to
+         *         the caller.
+         * @param index Position of an entry (in internal entry list) that is to be
+         *        removed.
+         * @return An owning pointer to removed entry.
+         *
+         * Returned entry belongs no database and has no parent group.
+         */
         Entry::Ptr takeEntry(size_t index) noexcept;
 
+        /** @brief Removes an entry and returns ownership of it to the caller.
+         * @param group Non-owning pointer to the entry to be removed. This pointer cannot be nullptr.
+         *
+         * Returned entry belongs to no database and has no parent group.
+         * If \p entry is not directly owned by current group, result is undefined behavior.
+         */
         inline Entry::Ptr takeEntry(Entry* entry) noexcept{
             return takeEntry(index(entry));
         }
 
+        /** @brief Removes an entry and destroys it.
+         * @param index Position of an entry (in internal entry list) that is to be
+         *        removed and deleted.
+         */
         inline void removeEntry(size_t index) noexcept{
             fentries.erase(fentries.begin()+ index);
         }
 
+        /** @brief Removes an entry and destroys it.
+         * @param group Non-owning pointer to the entry to be removed. This pointer cannot be nullptr.
+         *
+         * If \p entry is not directly owned by current group, result is undefined behavior.
+         */
         inline void removeEntry(Entry* entry) noexcept{
             return removeEntry(index(entry));
         }
@@ -1213,7 +1469,7 @@ public:
         Database* fdatabase;
 
         Uuid fuuid;
-        Properties fproperties;
+        Properties::Ptr fproperties;
 
         std::vector<Group::Ptr> fgroups;
         std::vector<Entry::Ptr> fentries;
@@ -1223,41 +1479,15 @@ public:
         friend class BasicDatabaseModel;
     };
 
-/*    class DeletedObject{
-    public:
-        inline DeletedObject(Uuid uuid, std::time_t deletionTime) noexcept
-            :uuid(std::move(uuid)),
-              deleteionTime(deletionTime)
-        {}
-
-        inline bool operator==(const DeletedObject& object) const noexcept{
-            return uuid == object.uuid;
-        }
-
-        inline bool operator!=(const DeletedObject& object) const noexcept{
-            return uuid != object.uuid;
-        }
-
-        inline bool operator<(const DeletedObject& object) const noexcept{
-            return uuid < object.uuid;
-        }
-
-        inline bool operator>(const DeletedObject& object) const noexcept{
-            return uuid > object.uuid;
-        }
-
-        inline bool operator<=(const DeletedObject& object) const noexcept{
-            return uuid <= object.uuid;
-        }
-
-        inline bool operator>=(const DeletedObject& object) const noexcept{
-            return uuid >= object.uuid;
-        }
-
-        const Uuid uuid;
-        const std::time_t deleteionTime;
-    };*/
-
+    /** @brief Constructs an empty database.
+     *
+     * Empty database owns only a root group, which owns no further groups or entries.
+     * Created dtabase has default constructed \p Settings object, except for fields
+     * Settings::databaseNameChanged, Settings::databaseDescriptionChanged,
+     * Settings::defaultUsernameChanged, Settings::masterKeyChanged,
+     * Settings::recycleBinChanged and Settings::entryTemplatesGroupChanged, which are
+     * all set to current time (as reported by time() function.).
+     */
     Database();
 
     Database(const Database&) = delete;
@@ -1265,155 +1495,206 @@ public:
     Database& operator=(const Database&) = delete;
     Database& operator=(Database&&) = delete;
 
-    inline ~Database() noexcept{}
+    //inline ~Database() noexcept{}
 
+    /** @brief Returns non-owning pointer to the root group of database.
+     *
+     * Each group and entry owned by database is owned (directly or indirectly)
+     * by this group.
+     */
     inline Group* root() noexcept{
         return froot.get();
     }
 
+    /** @brief Returns non-owning pointer to the root group of database.
+     *
+     * Each group and entry owned by database is owned (directly or indirectly)
+     * by this group.
+     */
     const Group* root() const noexcept{
         return froot.get();
     }
 
+    /** @brief Returns non-owning pointer to the group with specified UUID.
+     * @param uuid UUID of a group object to retrieve.
+     * @return Group with specified UUID or nullptr if no such group exists.
+     *
+     * This method searches through entire database tree.
+     */
     inline Group* group(const Uuid& uuid) noexcept{
         if (froot->fuuid == uuid)
             return froot.get();
         return froot->groupLookup(uuid);
     }
 
+    /** @brief Returns non-owning pointer to the group with specified UUID.
+     * @param uuid UUID of a group object to retrieve.
+     * @return Group with specified UUID or nullptr if no such group exists.
+     *
+     * This method searches through entire database tree.
+     */
     inline const Group* group(const Uuid& uuid) const noexcept{
         if (froot->fuuid == uuid)
             return froot.get();
         return froot->groupLookup(uuid);
     }
 
+    /** @brief Returns non-owning pointer to the entry with specified UUID.
+     * @param uuid UUID of an entry object to retrieve.
+     * @return Entry with specified UUID or nullptr if no such entry exists.
+     *
+     * This method searches through entire database tree.
+     */
     inline Entry* entry(const Uuid& uuid) noexcept{
         return froot->entryLookup(uuid);
     }
 
+    /** @brief Returns non-owning pointer to the entry with specified UUID.
+     * @param uuid UUID of an entry object to retrieve.
+     * @return Entry with specified UUID or nullptr if no such entry exists.
+     *
+     * This method searches through entire database tree.
+     */
     inline const Entry* entry(const Uuid& uuid) const noexcept{
         return froot->entryLookup(uuid);
     }
 
-    /*inline const Uuid& recycleBinUuid() const{ return fsettings.recycleBinUUID; }
-    inline const Uuid& entryTemplatesGroup() const noexcept{ return fsettings.entryTemplatesGroup; }
-    inline const Uuid& lastSelectedGroup() const noexcept{ return fsettings.lastSelectedGroup; }
-    inline const Uuid& lastTopVisibleGroup() const noexcept{ return fsettings.lastTopVisibleGroup; }
-    inline const std::string& name() const noexcept{ return fsettings.databaseName; }
-    inline const std::string& description() const noexcept{ return fsettings.databaseDescription; }
-    inline const std::string& defaultUsername() const noexcept{ return fsettings.defaultUsername; }
-    inline const std::string& color() const noexcept{ return fsettings.color; }
-    // What is this anyway? Color of an icon bacground?
-    // Have I ever seen a feature that is more useless
-    // but has a noticeable effect?
-    inline std::time_t nameChanged() const noexcept{ return fsettings.databaseNameChanged; }
-    inline std::time_t descriptionChanged() const noexcept{ return fsettings.databaseDescriptionChanged; }
-    inline std::time_t defaultUsernameChanged() const noexcept{ return fsettings.defaultUsernameChanged; }
-    inline std::time_t masterKeyChanged() const noexcept{ return fsettings.masterKeyChanged; }
-    inline std::time_t recycleBinChanged() const noexcept{ return fsettings.recycleBinChanged; }
-    inline std::time_t entryTemplatesGroupChanged() const noexcept{ return fsettings.entryTemplatesGroupChanged; }
-    inline MemoryProtectionFlags memoryProtection() const noexcept{ return fsettings.memoryProtection; }
-    inline bool recycleBinEnabled() const noexcept{ return fsettings.recycleBinEnabled; }
-    inline int historyMaxItems() const noexcept{ return fsettings.historyMaxItems; }
-    inline unsigned int maintenanceHistoryDays() const noexcept{ return fsettings.maintenanceHistoryDays; }
-    inline int64_t masterKeyChanges() const noexcept{ return fsettings.masterKeyChangeRec; }
-    inline int64_t masterKeyChangForce() const noexcept{ return fsettings.masterKeyChangeForce; }
-    inline int64_t historyMaxSize() const noexcept{ return fsettings.historyMaxSize; }
-*/
+    /** @brief current Settings object.
+     */
     inline const Settings& settings() const noexcept{
-        return fsettings;
+        return *fsettings.get();
     }
 
-    inline void setSettings(Settings settings){
-        fsettings = std::move(settings);
+    /** @brief current Settings object.
+     */
+    inline Settings& settings() noexcept{
+        return *fsettings.get();
     }
 
-    //ToDo: figure out a way to purge unused custom icons on-demand.
+    /** @brief Changes current settings object.
+     * @return Pointer to old settings object. This pointer is never nullptr.
+     */
+    inline Settings::Ptr setSettings(Settings::Ptr settings){
+        using std::swap;
+        swap(fsettings, settings);
+        return settings;
+    }
+
+    /** @brief Returns count of custom icons stored in this database.
+     */
     inline size_t customIcons() const noexcept{
         return fcustomIcons.size();
     }
 
+    /** @brief Returns a reference to a CustomIcon objech at position \p index.
+     * @param index Index of custom icon to be retrieved. Valid values are in
+     *        [0, customIcons()).
+     */
     inline const CustomIcon::Ptr& customIcon(size_t index) const noexcept{
         return fcustomIcons.at(index);
     }
 
+    /** @brief Returns an index of custom icon with specified UUID.
+     *
+     * It returns -1 if no such icon is present in database.
+     */
     int customIconIndex(const Uuid& uuid) const noexcept;
 
+    /** @brief Returns an Icon with specific UUID or a StandardIcon.
+     * @param customIcon UUID of a custom icon to retrieve.
+     * @param sicon standard icon to return if \p customIcon UUID does not appear
+     *        in the database.
+     *
+     * This is an utility method. Since KDBX format can save both custom icon UUID and
+     * a standard icon index, this method is provided for cases where both are present.
+     * In such case custom icon takes precedence. If custom icon UUID equal Uuid::nil()
+     * or icon with given UUId is not present in the database, standard icon is returned.
+     */
     Icon icon(Uuid customIcon, StandardIcon sicon) const noexcept;
+
+    /** @brief Adds a CustomIcon into the database.
+     * @param icon Shared pointer to the custom icon to be added to the database.
+     *        This pointer cannot be nullptr.
+     * @return Icon object pointing to a CustomIcon \p icon's UUID.
+     *
+     * This method adds custom icon to the database only if ther is no custom icon
+     * with the same UUID already in the database. In other words,  custom icons
+     * are assumed to be equivalent if their UUIDs are the same. If a custom icon
+     * with the same UUID was already added to the database, added \p icon is ignored,
+     * and a reference to the custom icon already in the database is returned.
+     */
     Icon addCustomIcon(CustomIcon::Ptr icon);
 
+    /** @brief Adds custom icon into the database.
+     * @param Icon to be added to the database.
+     *
+     * This is an utility method. If \p icon is a custom icon, it calls
+     * addCustomIcon(icon.custom()) and returns its result. Otherwise it returns passed
+     * icon object unchanged.
+     */
     inline Icon addCustomIcon(const Icon& icon){
         if (icon.type() == Icon::Type::Custom)
             return addCustomIcon(icon.custom());
         return icon;
     }
 
-    class File{
-    public:
-        enum class CompressionAlgorithm: uint32_t
-        {
-            /// No compression.
-            None = 0,
+    /** @brief Serializes a database into an ostream object.
+     * @param file An owning pointer to an ostream object that is used to
+     *        to store serialized data.
+     * @param key Composite key used to encrypt serialized data. This parameter is
+     *        only used if \p settings indicates that the data is to be encrypted.
+     * @param settings Settings used to store the data.
+     * @return future object that gets back an owning pointer to \p ostream \p file
+     *         object when the serialization process is finished and the stream is
+     *         flushed.
+     *
+     * If serialization was interrupted by an error, returned future
+     * object will throw an apropriate exception in \p get() method. In such case
+     * retrieving the \p ostream object is not possible.
+     */
+    std::future<std::unique_ptr<std::ostream>> saveToFile(std::unique_ptr<std::ostream> file, const CompositeKey& key, const File::Settings& settings) const;
 
-            /// GZip compression.
-            GZip = 1,
+    /** @brief Serializes a database into an ostream object *** USING PLAIN XML FORMAT***.
+     * @param file An owning pointer to an ostream object that is used to
+     *        to store serialized data.
+     * @return future object that gets back an owning pointer to \p ostream \p file
+     *         object when the serialization process is finished and the stream is
+     *         flushed.
+     *
+     * This method is mainly useful for debugging serialization process, as sensitive
+     * data should never be saved to disk without protection.
+     * If serialization was interrupted by an error, returned future
+     * object will throw an apropriate exception in \p get() method. In such case
+     * retrieving the \p ostream object is not possible.
+     */
+    std::future<std::unique_ptr<std::ostream>> saveToXmlFile(std::unique_ptr<std::ostream> file) const;
 
-            Count = 2
-        };
-
-        struct Settings{
-            bool encrypt;
-            bool compress;
-            std::array<uint8_t, 16> cipherId;
-            uint64_t transformRounds;
-            KdbxRandomStream::Algorithm crsAlgorithm;
-            CompressionAlgorithm compression;
-
-            inline Settings() noexcept
-                :encrypt(false),
-                  compress(false),
-                  transformRounds(0),
-                  crsAlgorithm(KdbxRandomStream::Algorithm::Salsa20),
-                  compression(CompressionAlgorithm::None)
-            {}
-
-        };
-
-    private:
-        std::unique_ptr<std::istream> ffile;
-
-        std::array<uint8_t, 32> masterSeed;
-        std::array<uint8_t, 32> transformSeed;
-        std::array<uint8_t, 16> encryptionIV;
-        std::array<uint8_t, 32> streamStartBytes;
-
-        std::vector<uint8_t> protectedStreamKey; // what is this?
-
-
-    public:
-        Settings settings;
-
-        bool needsKey();
-        std::future<Database::Ptr> getDatabase(const CompositeKey& key);
-
-        friend class Database;
-    };
-
-    std::future<void> saveToFile(std::unique_ptr<std::ostream> file, const CompositeKey& key, const File::Settings& settings) const;
-    std::future<void> saveToXmlFile(std::unique_ptr<std::ostream> file) const;
-
+    /** @brief Reads in a KDBX file headers from \p file.
+     * @param file Owning pointer to an istream object that is to be read.
+     *
+     * This method reads headers of a KDBX-formated input and returns a File object
+     * that can be used in order to deserialize database object.
+     */
     static File loadFromFile(std::unique_ptr<std::istream> file);
 
+    /** @brief This method is necesary to initialize some external libraries used
+               When serializing and deserializing datbases.
+        It should be called at least once before saveToFile, saveToXmlFile or
+        loadFromFile methods are called.*/
     static void init() noexcept;
 private:
 
-    /** @brief constructs an empty database. */
+    /** @brief Constructs an unitialized database.
+     *
+     * This is internal constructor used only when database is deserialized.
+     */
     inline Database(DoNotInitEnum)
+        :fsettings(new Settings(DoNotInit))
     {}
 
     Group::Ptr froot;
     std::map<Uuid, time_t> fdeletedObjects;
-    Settings fsettings;
+    Settings::Ptr fsettings;
     CustomIcons fcustomIcons;
 
     std::map<std::string, std::string> customData;

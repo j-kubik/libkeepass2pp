@@ -46,7 +46,7 @@ public:
 class OStreamLink: public Pipeline::InLink{
 private:
         std::unique_ptr<std::ostream> ffile;
-        std::promise<void> finished;
+        std::promise<std::unique_ptr<std::ostream>> finished;
 public:
 
         OStreamLink(const std::string& filename) noexcept;
@@ -55,7 +55,7 @@ public:
                 :ffile(std::move(file))
         {}
 
-        std::future<void> getFuture() noexcept{
+        std::future<std::unique_ptr<std::ostream>> getFuture() noexcept{
             return finished.get_future();
         }
 
