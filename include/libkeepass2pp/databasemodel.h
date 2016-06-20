@@ -258,7 +258,7 @@ public:
         /**
          * @copydoc Database::Group::setProperties()
          */
-        inline void setProperties(Database::Group::Properties properties) const{
+        inline void setProperties(Database::Group::Properties::Ptr properties) const{
             DatabaseModel* model = this->model();
             model->setProperties(this->item(), std::move(properties));
         }

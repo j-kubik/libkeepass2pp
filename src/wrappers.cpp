@@ -1335,7 +1335,7 @@ std::vector<uint8_t> Inflater::oneShot(const std::vector<uint8_t>& input, int wi
 
 SafeVector<uint8_t> Inflater::oneShot(const SafeVector<uint8_t>& input, int windowBits){
     SafeVector<uint8_t> result;
-    SafeVector<uint8_t> output(0, input.size());
+    SafeVector<uint8_t> output(input.size());
 
     Inflater strm(windowBits);
     strm->next_in = input.data();

@@ -1503,7 +1503,7 @@ public:
     typedef const SafeVector<uint8_t>& WrittenType;
 
     static std::shared_ptr<SafeVector<uint8_t>> parseNew(XmlReader& reader, const Database::Meta& meta){
-        XML::String id = reader.attribute(String::AttrId);
+        XML::String id = reader.attribute(String::AttrRef);
         auto idpos = meta.binaries.find(id?id.c_str():"");
         if (idpos != meta.binaries.end()){
             parse<XML::String>(reader); // Skip the tag content
