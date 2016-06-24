@@ -52,7 +52,11 @@ public:
     {}
 
     Database::Settings::Ptr settings;
-    std::array<uint8_t, 32> headerHash; // ToDo is this how it works?
+    Uuid recycleBinUUID;
+    Uuid templatesUUID;
+    std::time_t recycleBinChanged;
+    std::time_t templatesChanged;
+    std::array<uint8_t, 32> headerHash; // ToDo: make use of this field...
     CustomIcons customIcons;
     std::map<std::string, std::string> customData;
     std::map<std::string, std::shared_ptr<SafeVector<uint8_t>>> binaries;
@@ -1145,7 +1149,7 @@ public:
         std::string localName = reader.localName();
         if (localName == String::Binary){
             XML::String id = reader.attribute(String::AttrId);
-            if (id){ //Apparently KeepAssLib is ignoring binaries without id...
+            if (id){ //Apparently KeePassLib is ignoring binaries without id...
                 std::string sid(id.c_str());
                 auto pos = data.lower_bound(sid);
                 if (pos == data.end() || pos->first != sid)
@@ -1289,17 +1293,17 @@ public:
         std::string localName = reader.localName();
         // ToDo: headerHash field!!!
         if (localName == String::DbName){
-            data.settings->databaseName = parse<std::string>(reader);
+            data.settings->fname = parse<std::string>(reader);
         }else if (localName == String::DbNameChanged){
-            data.settings->databaseNameChanged = parse<Time>(reader);
+            data.settings->fnameChanged = parse<Time>(reader);
         }else if (localName == String::DbDesc){
-            data.settings->databaseDescription = parse<std::string>(reader);
+            data.settings->fdescription = parse<std::string>(reader);
         }else if (localName == String::DbDescChanged){
-            data.settings->databaseDescriptionChanged = parse<Time>(reader);
+            data.settings->fdescriptionChanged = parse<Time>(reader);
         }else if (localName == String::DbDefaultUser){
-            data.settings->defaultUsername = parse<std::string>(reader);
+            data.settings->fdefaultUsername = parse<std::string>(reader);
         }else if (localName == String::DbDefaultUserChanged){
-            data.settings->defaultUsernameChanged = parse<Time>(reader);
+            data.settings->fdefaultUsernameChanged = parse<Time>(reader);
         }else if (localName == String::DbMntncHistoryDays){
             data.settings->maintenanceHistoryDays = parse<int>(reader);
         }else if (localName == String::DbColor){
@@ -1317,13 +1321,13 @@ public:
         }else if (localName == String::RecycleBinEnabled){
             data.settings->recycleBinEnabled = parse<bool>(reader);
         }else if (localName == String::RecycleBinUuid){
-            data.settings->recycleBinUUID = parse<Uuid>(reader);
+            data.recycleBinUUID = parse<Uuid>(reader);
         }else if (localName == String::RecycleBinChanged){
-            data.settings->recycleBinChanged = parse<Time>(reader);
+            data.recycleBinChanged = parse<Time>(reader);
         }else if (localName == String::EntryTemplatesGroup){
-            data.settings->entryTemplatesGroup = parse<Uuid>(reader);
+            data.templatesUUID = parse<Uuid>(reader);
         }else if (localName == String::EntryTemplatesGroupChanged){
-            data.settings->entryTemplatesGroupChanged = parse<Time>(reader);
+            data.templatesChanged = parse<Time>(reader);
         }else if (localName == String::HistoryMaxItems){
             data.settings->historyMaxItems = parse<int>(reader);
         }else if (localName == String::HistoryMaxSize){
@@ -1354,12 +1358,12 @@ public:
 
         writer.writeElement<const char*>(String::Generator, "LibKeePass2++ " KEEPASS2PP_VERSION );
         writer.writeElement(String::HeaderHash, headerHash);
-        writer.writeElement(String::DbName, settings.databaseName);
-        writer.writeElement<Time>(String::DbNameChanged, settings.databaseNameChanged);
-        writer.writeElement(String::DbDesc, settings.databaseDescription);
-        writer.writeElement<Time>(String::DbDescChanged, settings.databaseDescriptionChanged);
-        writer.writeElement(String::DbDefaultUser, settings.defaultUsername);
-        writer.writeElement<Time>(String::DbDefaultUserChanged, settings.defaultUsernameChanged);
+        writer.writeElement(String::DbName, settings.name());
+        writer.writeElement<Time>(String::DbNameChanged, settings.nameChanged());
+        writer.writeElement(String::DbDesc, settings.description());
+        writer.writeElement<Time>(String::DbDescChanged, settings.descriptionChanged());
+        writer.writeElement(String::DbDefaultUser, settings.defaultUsername());
+        writer.writeElement<Time>(String::DbDefaultUserChanged, settings.defaultUsernameChanged());
         writer.writeElement(String::DbMntncHistoryDays, settings.maintenanceHistoryDays);
         writer.writeElement(String::DbColor, settings.color);
         writer.writeElement<Time>(String::DbKeyChanged, settings.masterKeyChanged);
@@ -1368,10 +1372,18 @@ public:
         writer.writeElement(String::MemoryProt, settings.memoryProtection);
         writer.writeElement(String::CustomIcons, data->fcustomIcons);
         writer.writeElement(String::RecycleBinEnabled, settings.recycleBinEnabled);
-        writer.writeElement(String::RecycleBinUuid, settings.recycleBinUUID);
-        writer.writeElement<Time>(String::RecycleBinChanged, settings.recycleBinChanged);
-        writer.writeElement(String::EntryTemplatesGroup, settings.entryTemplatesGroup);
-        writer.writeElement<Time>(String::EntryTemplatesGroupChanged, settings.entryTemplatesGroupChanged);
+        if (data->recycleBin()){
+            writer.writeElement(String::RecycleBinUuid, data->recycleBin()->uuid());
+        }else{
+            writer.writeElement(String::RecycleBinUuid, Uuid::nil());
+        }
+        writer.writeElement<Time>(String::RecycleBinChanged, data->recycleBinChanged());
+        if (data->templates()){
+            writer.writeElement(String::EntryTemplatesGroup, data->templates()->uuid());
+        }else{
+            writer.writeElement(String::EntryTemplatesGroup, Uuid::nil());
+        }
+        writer.writeElement<Time>(String::EntryTemplatesGroupChanged, data->templatesChanged());
         writer.writeElement(String::HistoryMaxItems, settings.historyMaxItems);
         writer.writeElement(String::HistoryMaxSize, settings.historyMaxSize);
         writer.writeElement(String::LastSelectedGroup, settings.lastSelectedGroup);
@@ -1556,7 +1568,7 @@ public:
         std::stringstream s;
         s << data.second.get();
         writer.writeStartElement(String::Value);
-        writer.writeAttribute(String::AttrId, s.str().c_str());
+        writer.writeAttribute(String::AttrRef, s.str().c_str());
         writer.writeEndElement();
     }
 
@@ -1971,6 +1983,10 @@ public:
     }
 
     inline Database::Ptr takeResult(){
+        database->frecycleBin = database->group(meta.recycleBinUUID);
+        database->ftemplates = database->group(meta.templatesUUID);
+        database->frecycleBinChanged = meta.recycleBinChanged;
+        database->ftemplatesChanged = meta.templatesChanged;
         database->fsettings = std::move(meta.settings);
         database->customData = std::move(meta.customData);
         database->fcustomIcons = std::move(meta.customIcons);
@@ -2332,14 +2348,10 @@ std::future<Database::Ptr> Database::File::getDatabase(const CompositeKey& key){
     pipeline.setStart(std::unique_ptr<Pipeline::OutLink>(new IStreamLink(std::move(ffile))));
 
     if (settings.encrypt){
-        //SHA256_CTX sha256;
-        //SHA256_Init(&sha256);
         OSSL::Digest keyHash(EVP_sha256());
         keyHash.update(masterSeed);
         std::array<uint8_t, 32> hash = key.getCompositeKey(transformSeed, settings.transformRounds);
-        //SHA256_Update(&sha256, hash.data(), 32);
         keyHash.update(hash);
-        //SHA256_Final(hash.data(), &sha256);
         keyHash.final(hash);
 
         std::unique_ptr<EvpCipher> cipher(new EvpCipher());
@@ -2367,6 +2379,38 @@ std::future<Database::Ptr> Database::File::getDatabase(const CompositeKey& key){
 
     return result;
 
+}
+
+std::future<Database::Ptr> Database::File::getDatabase(){
+    using namespace Internal;
+
+    KdbxRandomStream::Ptr randomStream(KdbxRandomStream::randomStream(KdbxRandomStream::Algorithm(settings.crsAlgorithm), protectedStreamKey));
+    std::unique_ptr<XmlReaderLink> finish(new XmlReaderLink(std::move(randomStream)));
+    std::future<Database::Ptr> result(finish->getFuture());
+
+    Pipeline pipeline;
+    pipeline.setStart(std::unique_ptr<Pipeline::OutLink>(new IStreamLink(std::move(ffile))));
+
+    if (settings.encrypt){
+        throw std::runtime_error("Database is compressed but no keys were provided.");
+    }
+
+    pipeline.appendLink(std::unique_ptr<Pipeline::InOutLink>(new UnhashStreamLink(streamStartBytes, true)));
+
+    if (settings.compress){
+        switch(settings.compression){
+        default:
+            throw std::runtime_error("Unknown copression algorythm.");
+        case CompressionAlgorithm::GZip:
+            pipeline.appendLink(std::unique_ptr<Pipeline::InOutLink>(new InflateLink()));
+        case CompressionAlgorithm::None:;
+        }
+    }
+
+    pipeline.setFinish(std::move(finish));
+    pipeline.run();
+
+    return result;
 }
 
 void Database::init() noexcept{

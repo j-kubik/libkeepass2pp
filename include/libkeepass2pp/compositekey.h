@@ -74,7 +74,7 @@ public:
 		keys.push_back(key);
 	}
 
-	std::array<uint8_t, 32> getCompositeKey(const std::array<uint8_t, 32>& transformSeed, uint64_t encryptionRounds) const noexcept;
+    std::array<uint8_t, 32> getCompositeKey(const std::array<uint8_t, 32>& transformSeed, uint64_t encryptionRounds) const;
 
 private:
 

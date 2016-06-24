@@ -110,7 +110,7 @@ CompositeKey::Key CompositeKey::Key::fromFile(std::string filename){
 
 //-----------------------------------------------------------------------------------------------
 
-std::array<uint8_t, 32> CompositeKey::getCompositeKey(const std::array<uint8_t, 32>& transformSeed, uint64_t encryptionRounds) const noexcept{
+std::array<uint8_t, 32> CompositeKey::getCompositeKey(const std::array<uint8_t, 32>& transformSeed, uint64_t encryptionRounds) const{
 
 	std::array<uint8_t, 32> hash;
     OSSL::Digest d(EVP_sha256());

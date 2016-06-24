@@ -139,6 +139,8 @@ public:
      */
     typedef std::unique_ptr<Database> Ptr;
 
+    class Settings;
+    class Version;
     class Entry;
     class Group;
     class Meta;
@@ -251,6 +253,24 @@ public:
          */
         std::future<Database::Ptr> getDatabase(const CompositeKey& key);
 
+        /** @brief Initializes deserialization process.
+         * @return std::future object that gets an owning pointer to database
+         *         as its value.
+         *
+         * This method starts deserialization process asynchronously. Returned
+         * std::future can be used to determine wheter a deserialized database is
+         * ready. If deserialization was interrupted by an error, returned future
+         * object will throw an apropriate exception in \p get() method.
+         *
+         * This is overload that doesn't use composite key, and can only be used
+         * if database is not encrypted. You can check whether composite key is
+         * necesary using needsKey() method. If this method is called while
+         * needsKey() returns \p true, an std::runtime_error is thrown with
+         * apropriate error message.
+         */
+        std::future<Database::Ptr> getDatabase();
+
+
         friend class Database;
     };
 
@@ -258,8 +278,6 @@ public:
      *
      * This class is storing database global settings.
      *
-     * @note ToDo: add methods setting values that update timestamps for
-     *       thse actions.
      */
     class Settings{
     public:
@@ -277,9 +295,7 @@ public:
          * anyway.
          */
         Settings(DoNotInitEnum val)
-            :recycleBinUUID(val),
-              entryTemplatesGroup(val),
-              lastSelectedGroup(val),
+            :lastSelectedGroup(val),
               lastTopVisibleGroup(val)
         {}
 
@@ -301,46 +317,93 @@ public:
          *  - recycleBinEnabled is set to false.
          */
         inline Settings()
-            :databaseNameChanged(0),
-              databaseDescriptionChanged(0),
-              defaultUsernameChanged(0),
-              masterKeyChanged(0),
-              recycleBinChanged(0),
-              entryTemplatesGroupChanged(0),
+            :masterKeyChanged(0),
               maintenanceHistoryDays(365),
               historyMaxItems(-1),
               masterKeyChangeRec(-1),
               masterKeyChangeForce(-1),
               historyMaxSize(-1),
               memoryProtection(1 << std::size_t(MemoryProtection::Password)),
-              recycleBinEnabled(false)
+              recycleBinEnabled(false),
+              fnameChanged(0),
+              fdescriptionChanged(0),
+              fdefaultUsernameChanged(0)
         {}
 
         Settings(Settings&&) = default;
         Settings& operator=(Settings&&) = default;
         Settings(const Settings&) = default;
 
-        std::string databaseName;
-        std::string databaseDescription;
-        std::string defaultUsername;
         std::string color; // just a raw string for now...
-        std::time_t databaseNameChanged;
-        std::time_t databaseDescriptionChanged;
-        std::time_t defaultUsernameChanged;
         std::time_t masterKeyChanged;
-        std::time_t recycleBinChanged;
-        std::time_t entryTemplatesGroupChanged;
         unsigned int maintenanceHistoryDays;
         int historyMaxItems;
         int64_t masterKeyChangeRec;
         int64_t masterKeyChangeForce;
         int64_t historyMaxSize;
         MemoryProtectionFlags memoryProtection;
-        Uuid recycleBinUUID;
-        Uuid entryTemplatesGroup;
         Uuid lastSelectedGroup;
         Uuid lastTopVisibleGroup;
         bool recycleBinEnabled;
+
+        inline const std::string& name() const noexcept{
+            return fname;
+        }
+
+        inline void setName(std::string name) noexcept{
+            using std::swap;
+            swap(name, fname);
+            fnameChanged = time(nullptr);
+        }
+
+        const std::time_t& nameChanged() const noexcept{
+            return fdescriptionChanged;
+        }
+
+        inline const std::string& description() const noexcept{
+            return fdescription;
+        }
+
+        inline void setDescription(std::string description) noexcept{
+            using std::swap;
+            swap(description, fdescription);
+            fdescriptionChanged = time(nullptr);
+        }
+
+        const std::time_t& descriptionChanged() const noexcept{
+            return fdescriptionChanged;
+        }
+
+        inline const std::string& defaultUsername() const noexcept{
+            return fdefaultUsername;
+        }
+
+        inline void setDefaultUsername(std::string username) noexcept{
+            using std::swap;
+            swap(username, fdefaultUsername);
+            fdefaultUsernameChanged = time(nullptr);
+        }
+
+        const std::time_t& defaultUsernameChanged() const noexcept{
+            return fdefaultUsernameChanged;
+        }
+
+
+
+
+    private:
+        std::string fname;
+        std::string fdescription;
+        std::string fdefaultUsername;
+
+        std::time_t fnameChanged;
+        std::time_t fdescriptionChanged;
+        std::time_t fdefaultUsernameChanged;
+
+
+        friend class Internal::Parser<Database::Meta>;
+        friend class Internal::Parser<Database>;
+        friend class Database;
     };
 
     /** @brief The Version class represents a version of a database entry.
@@ -1243,7 +1306,7 @@ public:
          *
          * If group has no parent group, result is undefined behavior.
          *
-         * It destroys group object.
+         * It has the same effect as parent()->removeGroup(this);
          */
         inline void remove() noexcept{
             parent()->removeGroup(this);
@@ -1254,8 +1317,7 @@ public:
          *
          * If group has no parent group, result is undefined behavior.
          *
-         * It removes group object from it's parent group and returns
-         * ownership of it to the caller.
+         * It has the same effect as parent()->takeGroup(this);
          */
         inline Ptr take() noexcept{
             return parent()->takeGroup(this);
@@ -1331,6 +1393,13 @@ public:
          * @return An owning pointer to removed group.
          *
          * Returned group belongs to no database and has no parent group.
+         *
+         * If returned group was owned by a database and was set as recycle bin
+         * group for that database, then recycle bin group for that database is set
+         * to \p nullptr with timestamp as reported by time().
+         * If returned group was owned by a database and was set as templates
+         * group for that database, then templates group for that database is set
+         * to \p nullptr with timestamp as reported by time().
          */
         Group::Ptr takeGroup(size_t index) noexcept;
 
@@ -1338,6 +1407,14 @@ public:
          * @param group Non-owning pointer to the subgroup to be removed. This pointer cannot be nullptr.
          *
          * Returned group belongs to no database and has no parent group.
+         *
+         * If returned group was owned by a database and was set as recycle bin
+         * group for that database, then recycle bin group for that database is set
+         * to \p nullptr with timestamp as reported by time().
+         * If returned group was owned by a database and was set as templates
+         * group for that database, then templates group for that database is set
+         * to \p nullptr with timestamp as reported by time().
+         *
          * If \p group is not directly owned by current group, result is undefined behavior.
          */
         inline Group::Ptr takeGroup(const Group* group) noexcept{
@@ -1347,6 +1424,13 @@ public:
         /** @brief Removes a subgroup and destroys it.
          * @param index Position of a group (in internal subgroup list) that is to be
          *        removed and deleted.
+         *
+         * If returned group was owned by a database and was set as recycle bin
+         * group for that database, then recycle bin group for that database is set
+         * to \p nullptr with timestamp as reported by time().
+         * If returned group was owned by a database and was set as templates
+         * group for that database, then templates group for that database is set
+         * to \p nullptr with timestamp as reported by time().
          */
         inline void removeGroup(size_t index) noexcept{
             takeGroup(index);
@@ -1354,6 +1438,13 @@ public:
 
         /** @brief Removes a subgroup and destroys it.
          * @param group Non-owning pointer to the subgroup to be removed. This pointer cannot be nullptr.
+         *
+         * If returned group was owned by a database and was set as recycle bin
+         * group for that database, then recycle bin group for that database is set
+         * to \p nullptr with timestamp as reported by time().
+         * If returned group was owned by a database and was set as templates
+         * group for that database, then templates group for that database is set
+         * to \p nullptr with timestamp as reported by time().
          *
          * If \p group is not directly owned by current group, result is undefined behavior.
          */
@@ -1481,12 +1572,14 @@ public:
 
     /** @brief Constructs an empty database.
      *
-     * Empty database owns only a root group, which owns no further groups or entries.
-     * Created dtabase has default constructed \p Settings object, except for fields
-     * Settings::databaseNameChanged, Settings::databaseDescriptionChanged,
-     * Settings::defaultUsernameChanged, Settings::masterKeyChanged,
-     * Settings::recycleBinChanged and Settings::entryTemplatesGroupChanged, which are
-     * all set to current time (as reported by time() function.).
+     * Empty database owns only a root group, which owns no further groups or
+     * entries. Created database has no recycle bin group set, no templates group
+     * set and default constructed \p Settings object, except for fields
+     * Settings::nameChanged(), Settings::descriptionChanged(),
+     * Settings::defaultUsernameChanged(), Settings::masterKeyChanged.
+     *
+     * recycleBinChanged() and templatesChanged() are set to current time (as
+     * reported by time() function.).
      */
     Database();
 
@@ -1513,6 +1606,87 @@ public:
      */
     const Group* root() const noexcept{
         return froot.get();
+    }
+
+    /** @brief Returns recycle bin group or nullptr if no recycle bin was set.
+     *
+     * Whether recycle bin is active or not depends not only on a valid group
+     * being set, but also on settings().recycleBinEnabled field.
+     *
+     * Recycle bin group should be used as temporary directory to which
+     * deleted groups and entries are moved, and left for some time before
+     * being finally deleted. If no recycle bin is set, entries and groups
+     * should be deleted immediately.
+     */
+    inline const Group* recycleBin() const noexcept{
+         return frecycleBin;
+    }
+
+    /** @brief Returns recycle bin group or nullptr if no recycle bin was set.
+     *
+     * Whether recycle bin is active or not depends not only on a valid group
+     * being set, but also on settings().recycleBinEnabled field.
+     *
+     * Recycle bin group should be used as temporary directory to which
+     * deleted groups and entries are moved, and left for some time before
+     * being finally deleted. If no recycle bin is set, entries and groups
+     * should be deleted immediately.
+     */
+    inline Group* recycleBin() noexcept{
+         return frecycleBin;
+    }
+
+    /** @brief Sets a new recycle bin group.
+     * @param bin New recycle bin Group pointer or \p nullptr.
+     * @param changed Time when recycle bin group was changed. In order to avoid
+     *        inconsistencies it is recomended that default value (time()) is used.
+     *
+     * If \p bin is a valid pointer, it must point to a group that is owned by
+     * this database.
+     */
+    void setRecycleBin(Group* bin, std::time_t changed = time(nullptr)) noexcept;
+
+    /** @brief Time when recycle bin group was last set (as reported by time()).
+     */
+    const std::time_t& recycleBinChanged() const noexcept{
+        return frecycleBinChanged;
+    }
+
+    /** @brief Returns templates group or nullptr if no templates group was set.
+     *
+     * Templates group is a special database group. It is recomened to user
+     * interface impementers to use entries owned by this group as templates
+     * to be presented to the user when creating a new entry.
+     */
+    inline const Group* templates() const noexcept{
+         return ftemplates;
+    }
+
+    /** @brief Returns templates group or nullptr if no templates group was set.
+     *
+     * Templates group is a special database group. It is recomened to user
+     * interface impementers to use entries owned by this group as templates
+     * to be presented to the user when creating a new entry.
+     */
+    inline Group* templates() noexcept{
+         return ftemplates;
+    }
+
+    /** @brief Sets a templates group.
+     * @param templ New templates group pointer or nullptr.
+     * @param changed Time when templates group was changed. In order to avoid
+     *        inconsistencies it is recomended that default value (time()) is used.
+     *
+     * If \p templ is a valid pointer, it must point to a group that is owned by
+     * this database.
+     *
+     */
+    inline void setTemplates(Group* templ, std::time_t changed = time(nullptr)) noexcept;
+
+    /** @brief Time when templates group was last set (as reported by time()).
+     */
+    const std::time_t& templatesChanged() const noexcept{
+        return ftemplatesChanged;
     }
 
     /** @brief Returns non-owning pointer to the group with specified UUID.
@@ -1688,14 +1862,19 @@ private:
      *
      * This is internal constructor used only when database is deserialized.
      */
-    inline Database(DoNotInitEnum)
-        :fsettings(new Settings(DoNotInit))
-    {}
+    //inline Database(DoNotInitEnum)
+    //    :fsettings(new Settings(DoNotInit))
+    //{}
 
     Group::Ptr froot;
     std::map<Uuid, time_t> fdeletedObjects;
     Settings::Ptr fsettings;
     CustomIcons fcustomIcons;
+
+    Group* frecycleBin;
+    Group* ftemplates;
+    std::time_t frecycleBinChanged;
+    std::time_t ftemplatesChanged;
 
     std::map<std::string, std::string> customData;
 

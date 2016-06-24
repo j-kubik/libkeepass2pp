@@ -98,17 +98,23 @@ void Database::Entry::setDatabase(Database* database, BasicDatabaseModel* model)
 //-----------------------------------------------------------------------------------
 
 void Database::Group::clearDatabase() noexcept{
-    if (fdatabase){
-        for (const Entry::Ptr& entry: fentries){
-            entry->clearDatabase(fdatabase);
-        }
+    if (!fdatabase)
+        return;
 
-        for (const Group::Ptr& group: fgroups){
-            group->clearDatabase();
-        }
-        fdatabase->fdeletedObjects[fuuid] = time(nullptr);
-        fdatabase = nullptr;
+    for (const Entry::Ptr& entry: fentries){
+        entry->clearDatabase(fdatabase);
     }
+
+    for (const Group::Ptr& group: fgroups){
+        group->clearDatabase();
+    }
+    if (fdatabase->recycleBin() == this)
+        fdatabase->setRecycleBin(nullptr);
+    if (fdatabase->templates() == this)
+        fdatabase->setTemplates(nullptr);
+
+    fdatabase->fdeletedObjects[fuuid] = time(nullptr);
+    fdatabase = nullptr;
 }
 
 
@@ -244,8 +250,7 @@ Database::Group::Ptr Database::Group::takeGroup(size_t index) noexcept{
     Group::Ptr result(std::move(fgroups.at(index)));
     fgroups.erase(fgroups.begin()+index);
     result->fparent = nullptr;
-    if (fdatabase)
-        result->clearDatabase();
+    result->clearDatabase();
     return result;
 }
 
@@ -271,15 +276,33 @@ Database::Entry::Ptr Database::Group::takeEntry(size_t index) noexcept{
 
 Database::Database()
     :froot(new Group(this)),
-      fsettings(new Settings())
+      fsettings(new Settings()),
+      frecycleBin(nullptr),
+      ftemplates(nullptr)
 {
     std::time_t currentTime=time(nullptr);
-    fsettings->databaseNameChanged = currentTime;
-    fsettings->databaseDescriptionChanged = currentTime;
-    fsettings->defaultUsernameChanged = currentTime;
+    fsettings->fnameChanged = currentTime;
+    fsettings->fdescriptionChanged = currentTime;
+    fsettings->fdefaultUsernameChanged = currentTime;
     fsettings->masterKeyChanged = currentTime;
-    fsettings->recycleBinChanged = currentTime;
-    fsettings->entryTemplatesGroupChanged = currentTime;
+    frecycleBinChanged = currentTime;
+    ftemplatesChanged = currentTime;
+}
+
+void Database::setRecycleBin(Group* bin, std::time_t changed) noexcept{
+    assert(!bin || bin->database() == this);
+    if (frecycleBin != bin){
+        frecycleBin = bin;
+        frecycleBinChanged = changed;
+    }
+}
+
+void Database::setTemplates(Group* templ, std::time_t changed) noexcept{
+    assert(!templ || templ->database() == this);
+    if (ftemplates != templ){
+        ftemplates = templ;
+        ftemplatesChanged = changed;
+    }
 }
 
 int Database::customIconIndex(const Uuid& uuid) const noexcept{

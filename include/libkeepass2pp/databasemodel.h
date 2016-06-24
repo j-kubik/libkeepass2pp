@@ -14,7 +14,7 @@ namespace Kdbx{
  *
  * Database model takes ownership of database that it works on. For as long as model
  * owns a database, any mutating (non-const) access to database fields and methods is
- * considered to produce unkown behavior.
+ * considered to produce unknown behavior.
  */
 class BasicDatabaseModel{
 private:
@@ -462,12 +462,20 @@ public:
         friend ModelType;
     };
 
-    inline DatabaseModel() noexcept
-    {}
+    using BasicDatabaseModel::BasicDatabaseModel;
+    using BasicDatabaseModel::operator=;
 
-    inline DatabaseModel(Database::Ptr database) noexcept
-        :BasicDatabaseModel(std::move(database))
-    {}
+//    inline DatabaseModel() noexcept
+//    {}
+
+//    inline DatabaseModel(Database::Ptr database) noexcept
+//        :BasicDatabaseModel(std::move(database))
+//    {}
+
+//    inline DatabaseModel& operator=(Database::Ptr database) noexcept{
+//        reset(std::move(database));
+//        return *this;
+//    }
 
     inline Group root() noexcept{
         return Group(fdatabase->root(), static_cast<ModelType*>(this));
@@ -477,9 +485,65 @@ public:
         return typename DatabaseModel<const ModelType>::Group(fdatabase->root(), static_cast<const ModelType*>(this));
     }
 
-    inline DatabaseModel& operator=(Database::Ptr database) noexcept{
-        reset(std::move(database));
-        return *this;
+    /** @brief Returns recycle bin group index or invalid index if no recycle
+     *         bin was set.
+     *
+     * Whether recycle bin is active or not depends not only on a valid group
+     * being set, but also on settings().recycleBinEnabled field.
+     *
+     * Recycle bin group should be used as temporary directory to which
+     * deleted groups and entries are moved, and left for some time before
+     * being finally deleted. If no recycle bin is set, entries and groups
+     * should be deleted immediately.
+     */
+    inline Group recycleBin() noexcept{
+         return Group(fdatabase->recycleBin(), this);
+    }
+
+    /** @brief Sets a new recycle bin group.
+     * @param bin New recycle bin Group index or invalid index.
+     * @param changed Time when recycle bin group was changed. In order to avoid
+     *        inconsistencies it is recomended that default value (time()) is used.
+     *        Model implementations are allowed to ignore \p changed parameter.
+     */
+    virtual inline void setRecycleBin(Group bin, std::time_t changed = time(nullptr)) noexcept{
+        fdatabase->setRecycleBin(bin.item(), changed);
+    }
+
+    /** @brief Time when recycle bin group was last set (as reported by time()).
+     */
+    const std::time_t& recycleBinChanged() noexcept{
+        return fdatabase->recycleBinChanged();
+    }
+
+    /** @brief Returns templates group index or invalid index if no templates
+     *         group was set.
+     *
+     * Templates group is a special database group. It is recomened to user
+     * interface impementers to use entries owned by this group as templates
+     * to be presented to the user when creating a new entry.
+     */
+    inline Group templates() noexcept{
+         return Group(fdatabase->templates(), this);
+    }
+
+    /** @brief Sets a templates group.
+     * @param templ New templates group index or invalid index.
+     * @param changed Time when templates group was changed. In order to avoid
+     *        inconsistencies it is recomended that default value (time()) is used.
+     *        Model implementations are allowed to ignore \p changed parameter.
+     *
+     * If \p templ is a valid index, it must point to a group that is owned by
+     * this database.
+     */
+    virtual inline void setTemplates(Group templ, std::time_t changed = time(nullptr)) noexcept{
+        fdatabase->setTemplates(templ.item(), changed);
+    }
+
+    /** @brief Time when templates group was last set (as reported by time()).
+     */
+    const std::time_t& templatesChanged() noexcept{
+        return fdatabase->templatesChanged();
     }
 
     inline Version version(const Database::Version* version) noexcept{
