@@ -1588,8 +1588,6 @@ public:
     Database& operator=(const Database&) = delete;
     Database& operator=(Database&&) = delete;
 
-    //inline ~Database() noexcept{}
-
     /** @brief Returns non-owning pointer to the root group of database.
      *
      * Each group and entry owned by database is owned (directly or indirectly)
@@ -1681,7 +1679,7 @@ public:
      * this database.
      *
      */
-    inline void setTemplates(Group* templ, std::time_t changed = time(nullptr)) noexcept;
+    void setTemplates(Group* templ, std::time_t changed = time(nullptr)) noexcept;
 
     /** @brief Time when templates group was last set (as reported by time()).
      */
@@ -1857,14 +1855,6 @@ public:
         loadFromFile methods are called.*/
     static void init() noexcept;
 private:
-
-    /** @brief Constructs an unitialized database.
-     *
-     * This is internal constructor used only when database is deserialized.
-     */
-    //inline Database(DoNotInitEnum)
-    //    :fsettings(new Settings(DoNotInit))
-    //{}
 
     Group::Ptr froot;
     std::map<Uuid, time_t> fdeletedObjects;

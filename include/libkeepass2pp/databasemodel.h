@@ -465,17 +465,9 @@ public:
     using BasicDatabaseModel::BasicDatabaseModel;
     using BasicDatabaseModel::operator=;
 
-//    inline DatabaseModel() noexcept
-//    {}
-
-//    inline DatabaseModel(Database::Ptr database) noexcept
-//        :BasicDatabaseModel(std::move(database))
-//    {}
-
-//    inline DatabaseModel& operator=(Database::Ptr database) noexcept{
-//        reset(std::move(database));
-//        return *this;
-//    }
+    inline DatabaseModel(Database::Ptr database) noexcept
+        :BasicDatabaseModel(std::move(database))
+    {}
 
     inline Group root() noexcept{
         return Group(fdatabase->root(), static_cast<ModelType*>(this));
@@ -497,7 +489,7 @@ public:
      * should be deleted immediately.
      */
     inline Group recycleBin() noexcept{
-         return Group(fdatabase->recycleBin(), this);
+         return Group(fdatabase->recycleBin(), static_cast<ModelType*>(this));
     }
 
     /** @brief Sets a new recycle bin group.
@@ -524,7 +516,7 @@ public:
      * to be presented to the user when creating a new entry.
      */
     inline Group templates() noexcept{
-         return Group(fdatabase->templates(), this);
+         return Group(fdatabase->templates(), static_cast<ModelType*>(this));
     }
 
     /** @brief Sets a templates group.
