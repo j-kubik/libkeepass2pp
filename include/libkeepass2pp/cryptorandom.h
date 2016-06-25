@@ -25,8 +25,9 @@ along with libkeepass2pp.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "util.h"
 
+namespace Kdbx{
 
-class KdbxRandomStream{
+class RandomStream{
 public:
 	enum class Algorithm: uint32_t{
 		Null = 0,
@@ -40,34 +41,34 @@ public:
 		Count = 3
 	};
 
-	typedef std::unique_ptr<KdbxRandomStream> Ptr;
+    typedef std::unique_ptr<RandomStream> Ptr;
 
-	KdbxRandomStream(const KdbxRandomStream&) = delete;
-	KdbxRandomStream(KdbxRandomStream&&) = delete;
-	KdbxRandomStream& operator=(const KdbxRandomStream&) = delete;
-	KdbxRandomStream& operator=(KdbxRandomStream&&) = delete;
+    RandomStream(const RandomStream&) = delete;
+    RandomStream(RandomStream&&) = delete;
+    RandomStream& operator=(const RandomStream&) = delete;
+    RandomStream& operator=(RandomStream&&) = delete;
 
-	inline KdbxRandomStream() noexcept{}
-	virtual ~KdbxRandomStream(){}
+    inline RandomStream() noexcept{}
+    virtual ~RandomStream(){}
 
 	virtual void readRaw(uint8_t* begin, uint8_t* end) noexcept =0;
-	virtual std::vector<uint8_t> read(std::size_t size) =0;
+    virtual SafeVector<uint8_t> read(std::size_t size) =0;
 
-	static Ptr randomStream(Algorithm algorithm, const std::vector<uint8_t>& key);
+    static Ptr randomStream(Algorithm algorithm, const SafeVector<uint8_t>& key);
 };
 
-class KdbxNull: public KdbxRandomStream{
+class Null: public RandomStream{
 public:
 
-    inline KdbxNull(const std::vector<uint8_t>&) noexcept
+    inline Null(const SafeVector<uint8_t>&) noexcept
     {}
 
     inline void readRaw(uint8_t* dataBegin, uint8_t* dataEnd) noexcept override{
         memset(dataBegin, 0, dataEnd - dataBegin);
     }
 
-    inline std::vector<uint8_t> read(std::size_t size) override{
-        return std::vector<uint8_t>(size);
+    inline SafeVector<uint8_t> read(std::size_t size) override{
+        return SafeVector<uint8_t>(size);
     }
 
     template <std::size_t size>
@@ -77,7 +78,7 @@ public:
 
 };
 
-class KdbxSalsa20: public KdbxRandomStream{
+class Salsa20: public RandomStream{
 private:
 	void reload() noexcept;
 
@@ -87,43 +88,31 @@ private:
 
 public:
 
-	KdbxSalsa20(const std::vector<uint8_t>& key) noexcept;
+    Salsa20(const SafeVector<uint8_t>& key) noexcept;
 
 	void readRaw(uint8_t* dataBegin, uint8_t* dataEnd) noexcept override;
-	std::vector<uint8_t> read(std::size_t size) override;
-
-	template <std::size_t size>
-	std::array<uint8_t, size> readFixed() noexcept{
-		std::array<uint8_t, size> result;
-		readRaw(result.data(), result.data() + size);
-		return result;
-	}
+    SafeVector<uint8_t> read(std::size_t size) override;
 
 };
 
 //ArcFourVariant;
 
-class KdbxArcFourVariant: public KdbxRandomStream{
+class ArcFourVariant: public RandomStream{
 private:
 	std::array<uint8_t, 256> state;
 	uint8_t m_i;
 	uint8_t m_j;
 
 public:
-	KdbxArcFourVariant(const std::vector<uint8_t>& key);
+    ArcFourVariant(const SafeVector<uint8_t>& key);
+
+    ~ArcFourVariant();
 
 	void readRaw(uint8_t* begin, uint8_t* end) noexcept override;
-	std::vector<uint8_t> read(std::size_t size) override;
-
-	template <std::size_t size>
-	std::array<uint8_t, size> readFixed(){
-		std::array<uint8_t, size> result;
-		readRaw(result.data(), result.data() + size);
-		return result;
-	}
+    SafeVector<uint8_t> read(std::size_t size) override;
 
 };
 
-
+}
 
 #endif // KDBXCRYPTORANDOM_H

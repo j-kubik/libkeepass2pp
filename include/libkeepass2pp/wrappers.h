@@ -134,14 +134,24 @@ public:
         update(data.data(), data.size());
     }
 
+    void update(const SafeVector<uint8_t>& data, std::size_t size){
+        update(data.data(), size);
+    }
+
+    void update(const SafeVector<uint8_t>& data){
+        update(data.data(), data.size());
+    }
+
     template <std::size_t s>
     void update(const std::array<uint8_t, s>& data){
         update(data.data(), s);
     }
 
     unsigned int final(uint8_t* data);
+    void final(SafeVector<uint8_t>& data);
 
     std::vector<uint8_t> final();
+    SafeVector<uint8_t> safeFinal();
 
     template <std::size_t s>
     void final(std::array<uint8_t, s>& result){
@@ -363,7 +373,7 @@ public:
     }
 
 	inline void operator()(xmlChar* str) noexcept{
-		free(str);
+        xmlFree(str);
 	}
 };
 

@@ -100,7 +100,7 @@ inline void outHex(std::ostream& o, const std::array<uint8_t, size>& cs, std::si
 
 
 std::vector<uint8_t> decodeBase64(std::string data);
-SafeVector<uint8_t> safeDecodeBase64(std::string data);
+SafeVector<uint8_t> safeDecodeBase64(SafeString<char> data);
 
 std::string encodeBase64(const uint8_t* data, std::size_t size);
 inline std::string encodeBase64(const std::vector<uint8_t>& data){
@@ -257,7 +257,7 @@ private:
 //       maybe XorredString class?
 class XorredBuffer{
 private:
-	std::vector<uint8_t> fmask;
+    SafeVector<uint8_t> fmask;
 	SafeVector<uint8_t> fbuffer;
 
 public:
@@ -284,7 +284,7 @@ public:
 		:fbuffer(std::move(plaintextBuffer))
 	{}
 
-	inline XorredBuffer(SafeVector<uint8_t> xoredBuffer, std::vector<uint8_t> xorMask) noexcept
+    inline XorredBuffer(SafeVector<uint8_t> xoredBuffer, SafeVector<uint8_t> xorMask) noexcept
 		:fmask(std::move(xorMask)),
 		  fbuffer(std::move(xoredBuffer))
     {
@@ -293,7 +293,7 @@ public:
  #endif
     }
 
-	inline void reXor(std::vector<uint8_t> xorMask) noexcept{
+    inline void reXor(SafeVector<uint8_t> xorMask) noexcept{
         if (xorMask.size()){
 #ifndef KEEPASS2PP_NDEBUG
             assert(xorMask.size() >= fbuffer.size());
@@ -316,7 +316,7 @@ public:
 		return fbuffer.size();
 	}
 
-	inline const std::vector<uint8_t>& mask() const noexcept{
+    inline const SafeVector<uint8_t>& mask() const noexcept{
 		return fmask;
 	}
 
@@ -344,7 +344,7 @@ public:
 		return SafeString<char>(fbuffer.begin(), fbuffer.end());
 	}
 
-    inline static XorredBuffer fromRaw(SafeVector<uint8_t> rawBuffer, std::vector<uint8_t> xorMask){
+    inline static XorredBuffer fromRaw(SafeVector<uint8_t> rawBuffer, SafeVector<uint8_t> xorMask){
         std::transform(rawBuffer.begin(), rawBuffer.end(), xorMask.begin(), rawBuffer.begin(), std::bit_xor<uint8_t>());
         return XorredBuffer(std::move(rawBuffer), std::move(xorMask));
     }
@@ -356,7 +356,7 @@ public:
         int size = distance(rawBegin, rawEnd);
         rawBuffer.reserve(size);
         std::transform(rawBegin, rawEnd, maskBegin, std::back_inserter(rawBuffer), std::bit_xor<uint8_t>());
-        return XorredBuffer(std::move(rawBuffer), std::vector<uint8_t>(maskBegin, maskBegin+size));
+        return XorredBuffer(std::move(rawBuffer), SafeVector<uint8_t>(maskBegin, maskBegin+size));
     }
 
 };

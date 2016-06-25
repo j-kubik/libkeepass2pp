@@ -498,7 +498,7 @@ public:
      *        inconsistencies it is recomended that default value (time()) is used.
      *        Model implementations are allowed to ignore \p changed parameter.
      */
-    virtual inline void setRecycleBin(Group bin, std::time_t changed = time(nullptr)) noexcept{
+    virtual inline void setRecycleBin(Group bin, std::time_t changed = time(nullptr)){
         fdatabase->setRecycleBin(bin.item(), changed);
     }
 
@@ -528,7 +528,7 @@ public:
      * If \p templ is a valid index, it must point to a group that is owned by
      * this database.
      */
-    virtual inline void setTemplates(Group templ, std::time_t changed = time(nullptr)) noexcept{
+    virtual inline void setTemplates(Group templ, std::time_t changed = time(nullptr)){
         fdatabase->setTemplates(templ.item(), changed);
     }
 

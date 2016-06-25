@@ -19,6 +19,32 @@ along with libkeepass2pp.  If not, see <http://www.gnu.org/licenses/>.
 
 namespace Kdbx{
 
+void Database::Settings::setName(std::string name) noexcept{
+    if (name != fname){
+        using std::swap;
+        swap(name, fname);
+        fnameChanged = time(nullptr);
+    }
+}
+
+void Database::Settings::setDescription(std::string description) noexcept{
+    if (description != fdescription){
+        using std::swap;
+        swap(description, fdescription);
+        fdescriptionChanged = time(nullptr);
+    }
+}
+
+void Database::Settings::setDefaultUsername(std::string username) noexcept{
+    if (username != fdefaultUsername){
+        using std::swap;
+        swap(username, fdefaultUsername);
+        fdefaultUsernameChanged = time(nullptr);
+    }
+}
+
+//----------------------------------------------------------------------------------
+
 void Database::Version::setDatabase(Database* database){
     if (icon.type() == Icon::Type::Custom){
         icon = database->addCustomIcon(icon.custom());

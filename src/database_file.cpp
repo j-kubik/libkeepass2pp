@@ -51,6 +51,10 @@ public:
         :settings(new Database::Settings())
     {}
 
+    inline Meta(const Database::File::Settings& settings)
+        :settings(new Database::Settings(settings))
+    {}
+
     Database::Settings::Ptr settings;
     Uuid recycleBinUUID;
     Uuid templatesUUID;
@@ -238,20 +242,20 @@ static constexpr char TagSeparators[] = ",;:";
 
 class XmlReader: public XML::InputBufferTextReader{
 private:
-    KdbxRandomStream::Ptr cryptoRandomStream;
+    RandomStream::Ptr cryptoRandomStream;
 
 public:
 
-    XmlReader(Input* input, xmlCharEncoding encoding, KdbxRandomStream::Ptr cryptoRandomStream)
+    XmlReader(Input* input, xmlCharEncoding encoding, RandomStream::Ptr cryptoRandomStream)
         :InputBufferTextReader(input, encoding),
           cryptoRandomStream(std::move(cryptoRandomStream))
     {}
 
-    inline KdbxRandomStream* randomStream() const noexcept{
+    inline RandomStream* randomStream() const noexcept{
         return cryptoRandomStream.get();
     }
 
-    inline KdbxRandomStream::Ptr takeRandomStream() noexcept{
+    inline RandomStream::Ptr takeRandomStream() noexcept{
         return std::move(cryptoRandomStream);
     }
 
@@ -259,20 +263,20 @@ public:
 
 class XmlWriter: public XML::OutputBufferTextWriter{
 private:
-    KdbxRandomStream::Ptr cryptoRandomStream;
+    RandomStream::Ptr cryptoRandomStream;
 
 public:
 
-    XmlWriter(Output* output, KdbxRandomStream::Ptr cryptoRandomStream)
+    XmlWriter(Output* output, RandomStream::Ptr cryptoRandomStream)
         :OutputBufferTextWriter(output),
           cryptoRandomStream(std::move(cryptoRandomStream))
     {}
 
-    inline KdbxRandomStream* randomStream() const noexcept{
+    inline RandomStream* randomStream() const noexcept{
         return cryptoRandomStream.get();
     }
 
-    inline KdbxRandomStream::Ptr takeRandomStream() noexcept{
+    inline RandomStream::Ptr takeRandomStream() noexcept{
         return std::move(cryptoRandomStream);
     }
 
@@ -309,17 +313,19 @@ private:
     virtual int read(char* buffer, int len) override;
     virtual void close() override;
 
-    KdbxRandomStream::Ptr randomStream;
-
     Pipeline::BufferPtr current;
     std::size_t currentPos;
+
+    Database::File::Settings fileSettings;
+    SafeVector<uint8_t> fprotectedStreamKey;
 
     std::promise<Database::Ptr> finishedPromise;
 public:
 
-    inline XmlReaderLink(KdbxRandomStream::Ptr randomStream) noexcept
-        :randomStream(std::move(randomStream)),
-          currentPos(0)
+    inline XmlReaderLink(const Database::File::Settings& settings, const SafeVector<uint8_t>& protectedStreamKey) noexcept
+        :currentPos(0),
+          fileSettings(settings),
+          fprotectedStreamKey(std::move(protectedStreamKey))
     {}
 
     inline std::future<Database::Ptr> getFuture(){
@@ -338,22 +344,21 @@ private:
     int write(const char* buffer, int len) override;
     void close() override;
 
-    KdbxRandomStream::Ptr randomStream;
-
     Pipeline::BufferPtr current;
     std::size_t currentPos;
 
-    const Kdbx::Database* database;
+    const Database* database;
+    SafeVector<uint8_t> fprotectedStreamKey;
     std::promise<void> finishedPromise;
 
     int findent;
     std::array<uint8_t, 32> fheaderHash;
 public:
 
-    inline XmlWriterLink(const Kdbx::Database* database, KdbxRandomStream::Ptr randomStream) noexcept
-        :randomStream(std::move(randomStream)),
-          currentPos(0),
+    inline XmlWriterLink(const Database* database, SafeVector<uint8_t> protectedStreamKey) noexcept
+        :currentPos(0),
           database(database),
+          fprotectedStreamKey(std::move(protectedStreamKey)),
           findent(0)
     {
         memset(fheaderHash.data(), 0, fheaderHash.size());
@@ -436,6 +441,8 @@ template <> class Parser<uint64_t>;
 template <> class Parser<bool>;
 template <> class Parser<std::string>;
 template <> class Parser<std::vector<uint8_t>>;
+template <> class Parser<SafeString<char>>;
+template <> class Parser<SafeVector<uint8_t>>;
 template <std::size_t size>
 class Parser<std::array<uint8_t, size>>;
 template <> class Parser<Uuid>;
@@ -670,10 +677,10 @@ public:
         XML::String result = reader.readString();
         if (attr && strcmp(attr.c_str(), String::True) == 0 ){
             if (result){
-                std::vector<uint8_t> encrypted = decodeBase64(result.c_str());
-                std::vector<uint8_t> xorMask = reader.randomStream()->read(encrypted.size());
+                SafeVector<uint8_t> xored = safeDecodeBase64(result.c_str());
+                SafeVector<uint8_t> xorMask = reader.randomStream()->read(xored.size());
                 xmlChar* res = result.get();
-                res = std::transform(encrypted.begin(), encrypted.end(), xorMask.begin(), res, std::bit_xor<uint8_t>());
+                res = std::transform(xored.begin(), xored.end(), xorMask.begin(), res, std::bit_xor<uint8_t>());
                 *res = 0;
             }
         }
@@ -696,7 +703,7 @@ public:
             if (attr && strcmp(attr.c_str(), String::True) == 0 ){
                 //std::cout << "Decoding: " << result.c_str() << std::endl;
                 SafeVector<uint8_t> xorred = safeDecodeBase64(result.c_str());
-                std::vector<uint8_t> mask = reader.randomStream()->read(xorred.size());
+                SafeVector<uint8_t> mask = reader.randomStream()->read(xorred.size());
                 return XorredBuffer(std::move(xorred), std::move(mask));
             }
             return XorredBuffer(result.get(), result.get() + xmlStrlen(result.get()));
@@ -706,7 +713,7 @@ public:
 
     static void writeOld(XmlWriter& writer, XorredBuffer buffer){
         if (buffer.mask().size()){
-            std::vector<uint8_t> xorBuf = writer.randomStream()->read(buffer.size());
+            SafeVector<uint8_t> xorBuf = writer.randomStream()->read(buffer.size());
             buffer.reXor(xorBuf);
             writer.writeAttribute(String::AttrProtected, String::True);
             writer.writeBase64(buffer.buffer());
@@ -892,6 +899,33 @@ public:
     }
 };
 
+template <>
+class Parser<SafeString<char>>{
+public:
+    static SafeString<char> parseNew(XmlReader& reader){
+        XML::String str = parse<XML::String>(reader);
+        if (str)
+            return SafeString<char>(str.c_str());
+        return SafeString<char>();
+    }
+
+    static void writeOld(XmlWriter& writer, const SafeString<char>& value){
+        writer.write(value.c_str());
+    }
+};
+
+template <>
+class Parser<SafeVector<uint8_t>>{
+public:
+    static SafeVector<uint8_t> parseNew(XmlReader& reader){
+        return safeDecodeBase64(parse<SafeString<char>>(reader));
+    }
+
+    static void writeOld(XmlWriter& writer, const SafeVector<uint8_t>& value){
+        writer.writeBase64(value);
+    }
+};
+
 template <std::size_t size>
 class Parser<std::array<uint8_t, size>>{
 public:
@@ -1070,7 +1104,7 @@ public:
     static std::shared_ptr<SafeVector<uint8_t>> parseNew(XmlReader& reader){
 
         XML::String compressed = reader.attribute(String::AttrCompressed);
-        SafeVector<uint8_t> result = safeDecodeBase64(parse<std::string>(reader));
+        SafeVector<uint8_t> result = parse<SafeVector<uint8_t>>(reader);
 
         if (compressed && strcmp(compressed.c_str(), String::True) == 0) // ToDo: is this correct? Check original keepass2 source.
             return std::make_shared<SafeVector<uint8_t>>(Zlib::Inflater::oneShot(result, MAX_WBITS | 16));
@@ -1285,8 +1319,11 @@ class Parser<Database::Meta>: public TagParser<Parser<Database::Meta>, Database:
 private:
     Database::Meta data;
 public:
-
     typedef const Database* WrittenType;
+
+    inline Parser(const Database::File::Settings& settings) noexcept
+        :data(settings)
+    {}
 
     bool tag(XmlReader& reader){
 
@@ -1957,12 +1994,14 @@ class Parser<Database>: public TagParser<Parser<Database>, Database::Ptr>{
 private:
     Database::Meta meta;
     Database::Ptr database;
+    const Database::File::Settings& settings;
 public:
 
     typedef const Database* WrittenType;
 
-    Parser()
-        :database(new Database())
+    Parser(const Database::File::Settings& settings)
+        :database(new Database()),
+          settings(settings)
     {}
 
     bool tag(XmlReader& reader){
@@ -1970,7 +2009,7 @@ public:
         //ToDo: check if meta is populated before root maybe?
         std::string localName = reader.localName();
         if (localName == String::Meta){
-            meta = parse<Database::Meta>(reader);
+            meta = parse<Database::Meta>(reader, settings);
         } else if (localName == String::Root){
             auto result = parse<RootTag>(reader, meta, database.get());
             database->froot = std::move(result.first);
@@ -2011,14 +2050,14 @@ void XmlReaderLink::runThread(){
             throw std::runtime_error("Unexpected end of stream.");
         currentPos = 0;
 
-        XmlReader reader(this, XML_CHAR_ENCODING_UTF8, std::move(randomStream));
+        XmlReader reader(this, XML_CHAR_ENCODING_UTF8, RandomStream::randomStream(fileSettings.crsAlgorithm, fprotectedStreamKey));
 
         reader.expectNext();
         xmlReaderTypes type = reader.nodeType();
         if (type != XML_READER_TYPE_ELEMENT || reader.localName() != String::DocNode)
             throw std::runtime_error("Bad stream format.");
 
-        finishedPromise.set_value(parse<Database>(reader));
+        finishedPromise.set_value(parse<Database>(reader, fileSettings));
     }catch(...){
         finishedPromise.set_exception(std::current_exception());
         throw;
@@ -2028,7 +2067,7 @@ void XmlReaderLink::runThread(){
 void XmlWriterLink::runThread(){
         current = Pipeline::BufferPtr(new Pipeline::Buffer(Pipeline::Buffer::maxSize));
         currentPos = 0;
-        XmlWriter writer(this, std::move(randomStream));
+        XmlWriter writer(this, RandomStream::randomStream(database->settings().fileSettings.crsAlgorithm, fprotectedStreamKey));
         writer.setIndent(findent);
         writer.writeStartDocument();
         writer.writeElement<Database>(String::DocNode, database, fheaderHash);
@@ -2066,12 +2105,10 @@ static void writeHeader(OSSL::Digest& d, std::ostream* file, Internal::HeaderFie
     d.update(data, size);
 }
 
-std::future<std::unique_ptr<std::ostream>> Database::saveToFile(std::unique_ptr<std::ostream> file, const CompositeKey& key, const File::Settings& settings) const{
+std::future<std::unique_ptr<std::ostream>> Database::saveToFile(std::unique_ptr<std::ostream> file, const CompositeKey& key) const{
     using namespace Internal;
     file->exceptions ( std::istream::failbit | std::istream::badbit | std::istream::eofbit );
 
-    //SHA256_CTX headerHash;
-    //SHA256_Init(&headerHash);
     OSSL::Digest d(EVP_sha256());
 
     uint8_t h[3*4];
@@ -2081,13 +2118,15 @@ std::future<std::unique_ptr<std::ostream>> Database::saveToFile(std::unique_ptr<
     file->write(reinterpret_cast<char*>(h), 3*4);
     d.update(&h[0], 3*4);
 
+    const File::Settings& settings = fsettings->fileSettings;
+
     Pipeline pipeline;
     std::unique_ptr<XmlWriterLink> writer;
     {
-        std::vector<uint8_t> data = OSSL::rand<std::vector<uint8_t>>(128);
+        SafeVector<uint8_t> data = OSSL::rand<SafeVector<uint8_t>>(128);
         std::array<uint8_t, 4> innerRandomStreamId;
         toLittleEndian(uint32_t(settings.crsAlgorithm), innerRandomStreamId.data());
-        writer = std::unique_ptr<XmlWriterLink>(new XmlWriterLink(this, KdbxRandomStream::randomStream(settings.crsAlgorithm, data) ));
+        writer = std::unique_ptr<XmlWriterLink>(new XmlWriterLink(this, data));
         writeHeader(d, file.get(), HeaderFieldId::InnerRandomStreamID, innerRandomStreamId.size(), innerRandomStreamId.data());
         writeHeader(d, file.get(), HeaderFieldId::ProtectedStreamKey, data.size(), data.data());
     }
@@ -2122,15 +2161,16 @@ std::future<std::unique_ptr<std::ostream>> Database::saveToFile(std::unique_ptr<
 
 
         // ToDo: some arrays here should be safe!!!
-        //SHA256_CTX sha256;
-        //SHA256_Init(&sha256);
+
         OSSL::Digest keyHash(EVP_sha256());
-        //SHA256_Update(&sha256, masterSeed.data(), 32);
         keyHash.update(masterSeed.data(), masterSeed.size());
-        std::array<uint8_t, 32> hash = key.getCompositeKey(transformSeed, settings.transformRounds);
-        //SHA256_Update(&sha256, hash.data(), 32);
+        SafeVector<uint8_t> hash = key.getCompositeKey(transformSeed, settings.transformRounds);
+        if (hash.size() != 32){
+            std::ostringstream s;
+            s << "Composed key has wrong size: " << hash.size() << "\nThis should not have happened.";
+            throw std::runtime_error(s.str());
+        }
         keyHash.update(hash);
-        //SHA256_Final(hash.data(), &sha256);
         keyHash.final(hash);
 
         std::unique_ptr<EvpCipher> cipher(new EvpCipher());
@@ -2167,7 +2207,7 @@ std::future<std::unique_ptr<std::ostream>> Database::saveToFile(std::unique_ptr<
     return result;
 }
 
-std::future<std::unique_ptr<std::ostream>> Database::saveToXmlFile(std::unique_ptr<std::ostream> file) const{
+/*std::future<std::unique_ptr<std::ostream>> Database::saveToXmlFile(std::unique_ptr<std::ostream> file) const{
     using namespace Internal;
 
     Pipeline pipeline;
@@ -2180,7 +2220,7 @@ std::future<std::unique_ptr<std::ostream>> Database::saveToXmlFile(std::unique_p
     pipeline.setFinish(std::move(finish));
     pipeline.run();
     return result;
-}
+}*/
 
 
 // Settings: cipherId - uuid,
@@ -2284,7 +2324,8 @@ Database::File Database::loadFromFile(std::unique_ptr<std::istream> file){
             break;
 
         case HeaderFieldId::ProtectedStreamKey:
-            result.protectedStreamKey = std::move(data);
+            result.protectedStreamKey.resize(data.size());
+            std::copy(data.begin(), data.end(), result.protectedStreamKey.begin());
             break;
 
         case HeaderFieldId::StreamStartBytes:
@@ -2296,7 +2337,7 @@ Database::File Database::loadFromFile(std::unique_ptr<std::istream> file){
         case HeaderFieldId::InnerRandomStreamID:
             if (data.size() != 4)
                 throw std::runtime_error("InnerRandomStreamID header invalid.");
-            result.settings.crsAlgorithm = KdbxRandomStream::Algorithm(fromLittleEndian<uint32_t>(data.data()));
+            result.settings.crsAlgorithm = RandomStream::Algorithm(fromLittleEndian<uint32_t>(data.data()));
             break;
         }
 
@@ -2340,17 +2381,18 @@ std::future<Database::Ptr> Database::File::getDatabase(const CompositeKey& key){
 
     using namespace Internal;
 
-    KdbxRandomStream::Ptr randomStream(KdbxRandomStream::randomStream(KdbxRandomStream::Algorithm(settings.crsAlgorithm), protectedStreamKey));
-    std::unique_ptr<XmlReaderLink> finish(new XmlReaderLink(std::move(randomStream)));
+    //KdbxRandomStream::Ptr randomStream(KdbxRandomStream::randomStream(KdbxRandomStream::Algorithm(settings.crsAlgorithm), protectedStreamKey));
+    std::unique_ptr<XmlReaderLink> finish(new XmlReaderLink(settings, protectedStreamKey));
     std::future<Database::Ptr> result(finish->getFuture());
 
     Pipeline pipeline;
     pipeline.setStart(std::unique_ptr<Pipeline::OutLink>(new IStreamLink(std::move(ffile))));
+    ffile = std::unique_ptr<std::istream>();
 
     if (settings.encrypt){
         OSSL::Digest keyHash(EVP_sha256());
         keyHash.update(masterSeed);
-        std::array<uint8_t, 32> hash = key.getCompositeKey(transformSeed, settings.transformRounds);
+        SafeVector<uint8_t> hash = key.getCompositeKey(transformSeed, settings.transformRounds);
         keyHash.update(hash);
         keyHash.final(hash);
 
@@ -2384,12 +2426,12 @@ std::future<Database::Ptr> Database::File::getDatabase(const CompositeKey& key){
 std::future<Database::Ptr> Database::File::getDatabase(){
     using namespace Internal;
 
-    KdbxRandomStream::Ptr randomStream(KdbxRandomStream::randomStream(KdbxRandomStream::Algorithm(settings.crsAlgorithm), protectedStreamKey));
-    std::unique_ptr<XmlReaderLink> finish(new XmlReaderLink(std::move(randomStream)));
+    std::unique_ptr<XmlReaderLink> finish(new XmlReaderLink(settings, protectedStreamKey));
     std::future<Database::Ptr> result(finish->getFuture());
 
     Pipeline pipeline;
     pipeline.setStart(std::unique_ptr<Pipeline::OutLink>(new IStreamLink(std::move(ffile))));
+    ffile = std::unique_ptr<std::istream>();
 
     if (settings.encrypt){
         throw std::runtime_error("Database is compressed but no keys were provided.");

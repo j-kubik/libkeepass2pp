@@ -128,7 +128,7 @@ std::vector<uint8_t> decodeBase64(std::string data){
 	return result;
 }
 
-SafeVector<uint8_t> safeDecodeBase64(std::string data){
+SafeVector<uint8_t> safeDecodeBase64(SafeString<char> data){
 	SafeVector<uint8_t> result;
 
 	if (data.back() == '=') data.pop_back();

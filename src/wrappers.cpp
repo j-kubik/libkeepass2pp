@@ -157,8 +157,21 @@ unsigned int Digest::final(uint8_t* data){
     return written;
 }
 
+void Digest::final(SafeVector<uint8_t>& data){
+    assert(data.size() >= size());
+    final(data.data());
+}
+
 std::vector<uint8_t> Digest::final(){
     std::vector<uint8_t> result(size());
+    unsigned int written = final(result.data());
+    unused(written);
+    assert(written == size());
+    return result;
+}
+
+SafeVector<uint8_t> Digest::safeFinal(){
+    SafeVector<uint8_t> result(size());
     unsigned int written = final(result.data());
     unused(written);
     assert(written == size());
@@ -1051,8 +1064,9 @@ InputBufferTextReader::InputBufferTextReader(Input* input, xmlCharEncoding encod
 	  fparserInput(createBuffer(encoding)),
 	  ftextReader(xmlNewTextReader(fparserInput.get(), 0))
 {
-    if (!ftextReader)
+    if (!ftextReader){
         Exception::throwLastError();
+    }
 
 	xmlTextReaderSetStructuredErrorHandler(ftextReader.get(), &xmlStructuredErrorFunc, this);
 }

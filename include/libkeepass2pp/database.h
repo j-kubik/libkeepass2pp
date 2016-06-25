@@ -193,7 +193,7 @@ public:
                                               //! Currently KDBX format only supports
                                               //! AES 256 CBC encryption.
             uint64_t transformRounds; //! Password transformation rounds to be applied.
-            KdbxRandomStream::Algorithm crsAlgorithm; //! Random stream algorithm to be
+            RandomStream::Algorithm crsAlgorithm; //! Random stream algorithm to be
                                                       //! used. This random stream is
                                                       //! used for additional
                                                       //! protection of sensitive data
@@ -203,7 +203,7 @@ public:
             /** @brief Constructs default Settings structure. Default values are:
              *  - encrypt and compress are set to true;
              *  - transformRounds is set to 5000;
-             *  - crsAlgorithm is set to KdbxRandomStream::Algorithm::Salsa20;
+             *  - crsAlgorithm is set to RandomStream::Algorithm::Salsa20;
              *  - compression is set to CompressionAlgorithm::GZip;
              *  - cipherId is set to AES_CBC_256_UUID.
              */
@@ -212,7 +212,7 @@ public:
                   compress(true),
                   cipherId(AES_CBC_256_UUID),
                   transformRounds(5000),
-                  crsAlgorithm(KdbxRandomStream::Algorithm::Salsa20),
+                  crsAlgorithm(RandomStream::Algorithm::Salsa20),
                   compression(CompressionAlgorithm::GZip)
             {}
 
@@ -226,17 +226,31 @@ public:
         std::array<uint8_t, 16> encryptionIV;
         std::array<uint8_t, 32> streamStartBytes;
 
-        std::vector<uint8_t> protectedStreamKey; // what is this?
+        SafeVector<uint8_t> protectedStreamKey;
 
+        /**
+         * @brief settings Settings object used during deserialization.
+         *
+         * This field can be accessed even in invalid \p File objects.
+         */
+        Settings settings;
 
     public:
-        Settings settings; //! Settings object used during deserialization
-                           //! (see getDatabase()).
-
         /** @brief Returns \p true if a proper composite key is required in order to
          *         properly deserialize a database.
          */
         bool needsKey();
+
+        /** @brief Checks whether \p File object is valid.
+         *
+         * getDatabase() can only be called on a valid object.
+         *
+         * @note \p settings member of \p File class can be acceses even if \p File
+         *       object is invalid.
+         */
+        inline bool valid() const noexcept{
+            return ffile.get();
+        }
 
         /** @brief Initializes deserialization process.
          * @param key CompositeKey that is used in order to decrypt datbase.
@@ -250,6 +264,12 @@ public:
          * std::future can be used to determine wheter a deserialized database is
          * ready. If deserialization was interrupted by an error, returned future
          * object will throw an apropriate exception in \p get() method.
+         *
+         * This method call renders \p File object invalid. Any subsequent calls
+         * to getDatabase() will produce undefined behavior. You can check if \p
+         * File object is valid using valid() method.
+         * @note \p settings member of \p File class can be acceses even if \p File
+         *       object is invalid.
          */
         std::future<Database::Ptr> getDatabase(const CompositeKey& key);
 
@@ -267,6 +287,12 @@ public:
          * necesary using needsKey() method. If this method is called while
          * needsKey() returns \p true, an std::runtime_error is thrown with
          * apropriate error message.
+         *
+         * This method call renders \p File object invalid. Any subsequent calls
+         * to getDatabase() will produce undefined behavior. You can check if \p
+         * File object is valid using valid() method.
+         * @note \p settings member of \p File class can be acceses even if \p File
+         *       object is invalid.
          */
         std::future<Database::Ptr> getDatabase();
 
@@ -284,23 +310,25 @@ public:
         /** @brief Unique, owning pointer to a Settings object.*/
         typedef std::unique_ptr<Settings> Ptr;
 
-        /** @brief Constructs uninitilized settings objects.
-         *
-         * Field of constructed object are default-initialized.
-         * This means that entries of the structure are not set to any specific
-         * values (except databaseName, databaseDescription, defaultUsername and
-         * color, which are empty strings).
-         *
-         * This constructor is useful if fields are to be assigned after construction
-         * anyway.
-         */
-        Settings(DoNotInitEnum val)
-            :lastSelectedGroup(val),
-              lastTopVisibleGroup(val)
-        {}
+//        /** @brief Constructs uninitilized settings objects.
+//         *
+//         * Field of constructed object are default-initialized.
+//         * This means that entries of the structure are not set to any specific
+//         * values (except databaseName, databaseDescription, defaultUsername and
+//         * color, which are empty strings).
+//         *
+//         * This constructor is useful if fields are to be assigned after construction
+//         * anyway.
+//         */
+//        Settings(DoNotInitEnum val)
+//            :lastSelectedGroup(val),
+//              lastTopVisibleGroup(val)
+//        {}
 
         //ToDo: rethink default values here.
         /** @brief Initializes settings to default values.
+         * @param settings File settings object used to copy-initalize fileSettings
+         *        field.
          *
          * Default values are:
          *  - databaseName, databaseDescription, defaultUsername and color are set
@@ -316,8 +344,9 @@ public:
          *    lastTopVisibleGroup is set no null UUID.
          *  - recycleBinEnabled is set to false.
          */
-        inline Settings()
-            :masterKeyChanged(0),
+        inline Settings(const Database::File::Settings& settings = Database::File::Settings())
+            :fileSettings(settings),
+              masterKeyChanged(0),
               maintenanceHistoryDays(365),
               historyMaxItems(-1),
               masterKeyChangeRec(-1),
@@ -330,10 +359,11 @@ public:
               fdefaultUsernameChanged(0)
         {}
 
-        Settings(Settings&&) = default;
-        Settings& operator=(Settings&&) = default;
-        Settings(const Settings&) = default;
+//        Settings(Settings&&) = default;
+//        Settings& operator=(Settings&&) = default;
+//        Settings(const Settings&) = default;
 
+        File::Settings fileSettings;
         std::string color; // just a raw string for now...
         std::time_t masterKeyChanged;
         unsigned int maintenanceHistoryDays;
@@ -350,11 +380,7 @@ public:
             return fname;
         }
 
-        inline void setName(std::string name) noexcept{
-            using std::swap;
-            swap(name, fname);
-            fnameChanged = time(nullptr);
-        }
+        void setName(std::string name) noexcept;
 
         const std::time_t& nameChanged() const noexcept{
             return fdescriptionChanged;
@@ -364,11 +390,7 @@ public:
             return fdescription;
         }
 
-        inline void setDescription(std::string description) noexcept{
-            using std::swap;
-            swap(description, fdescription);
-            fdescriptionChanged = time(nullptr);
-        }
+        void setDescription(std::string description) noexcept;
 
         const std::time_t& descriptionChanged() const noexcept{
             return fdescriptionChanged;
@@ -378,18 +400,11 @@ public:
             return fdefaultUsername;
         }
 
-        inline void setDefaultUsername(std::string username) noexcept{
-            using std::swap;
-            swap(username, fdefaultUsername);
-            fdefaultUsernameChanged = time(nullptr);
-        }
+        void setDefaultUsername(std::string username) noexcept;
 
         const std::time_t& defaultUsernameChanged() const noexcept{
             return fdefaultUsernameChanged;
         }
-
-
-
 
     private:
         std::string fname;
@@ -1815,7 +1830,6 @@ public:
      *        to store serialized data.
      * @param key Composite key used to encrypt serialized data. This parameter is
      *        only used if \p settings indicates that the data is to be encrypted.
-     * @param settings Settings used to store the data.
      * @return future object that gets back an owning pointer to \p ostream \p file
      *         object when the serialization process is finished and the stream is
      *         flushed.
@@ -1824,22 +1838,22 @@ public:
      * object will throw an apropriate exception in \p get() method. In such case
      * retrieving the \p ostream object is not possible.
      */
-    std::future<std::unique_ptr<std::ostream>> saveToFile(std::unique_ptr<std::ostream> file, const CompositeKey& key, const File::Settings& settings) const;
+    std::future<std::unique_ptr<std::ostream>> saveToFile(std::unique_ptr<std::ostream> file, const CompositeKey& key) const;
 
-    /** @brief Serializes a database into an ostream object *** USING PLAIN XML FORMAT***.
-     * @param file An owning pointer to an ostream object that is used to
-     *        to store serialized data.
-     * @return future object that gets back an owning pointer to \p ostream \p file
-     *         object when the serialization process is finished and the stream is
-     *         flushed.
-     *
-     * This method is mainly useful for debugging serialization process, as sensitive
-     * data should never be saved to disk without protection.
-     * If serialization was interrupted by an error, returned future
-     * object will throw an apropriate exception in \p get() method. In such case
-     * retrieving the \p ostream object is not possible.
-     */
-    std::future<std::unique_ptr<std::ostream>> saveToXmlFile(std::unique_ptr<std::ostream> file) const;
+//    /** @brief Serializes a database into an ostream object *** USING PLAIN XML FORMAT***.
+//     * @param file An owning pointer to an ostream object that is used to
+//     *        to store serialized data.
+//     * @return future object that gets back an owning pointer to \p ostream \p file
+//     *         object when the serialization process is finished and the stream is
+//     *         flushed.
+//     *
+//     * This method is mainly useful for debugging serialization process, as sensitive
+//     * data should never be saved to disk without protection.
+//     * If serialization was interrupted by an error, returned future
+//     * object will throw an apropriate exception in \p get() method. In such case
+//     * retrieving the \p ostream object is not possible.
+//     */
+//    std::future<std::unique_ptr<std::ostream>> saveToXmlFile(std::unique_ptr<std::ostream> file) const;
 
     /** @brief Reads in a KDBX file headers from \p file.
      * @param file Owning pointer to an istream object that is to be read.
@@ -1860,6 +1874,7 @@ private:
     std::map<Uuid, time_t> fdeletedObjects;
     Settings::Ptr fsettings;
     CustomIcons fcustomIcons;
+    SafeVector<uint8_t> compositeKey;
 
     Group* frecycleBin;
     Group* ftemplates;

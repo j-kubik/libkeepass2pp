@@ -20,14 +20,16 @@ along with libkeepass2pp.  If not, see <http://www.gnu.org/licenses/>.
 #include "../include/libkeepass2pp/cryptorandom.h"
 #include "../include/libkeepass2pp/wrappers.h"
 
-KdbxRandomStream::Ptr KdbxRandomStream::randomStream(Algorithm algorithm, const std::vector<uint8_t>& key){
+namespace Kdbx{
+
+RandomStream::Ptr RandomStream::randomStream(Algorithm algorithm, const SafeVector<uint8_t>& key){
 	switch (algorithm){
     case Algorithm::Null:
-        return KdbxRandomStream::Ptr(new KdbxNull(key));
+        return RandomStream::Ptr(new Null(key));
 	case Algorithm::ArcFourVariant:
-		return KdbxRandomStream::Ptr(new KdbxArcFourVariant(key));
+        return RandomStream::Ptr(new ArcFourVariant(key));
 	case Algorithm::Salsa20:
-		return KdbxRandomStream::Ptr(new KdbxSalsa20(key));
+        return RandomStream::Ptr(new Salsa20(key));
 	default:
 		throw std::runtime_error("Unknown crypto-random stream type.");
 	}
@@ -40,7 +42,7 @@ static constexpr uint32_t sigma[] = {
 	0x61707865, 0x3320646E, 0x79622D32, 0x6B206574
 };
 
-void KdbxSalsa20::reload() noexcept{
+void Salsa20::reload() noexcept{
 	std::array<uint32_t, 16> current = state;
 
 	for (unsigned int i=0; i<10; i++){
@@ -89,18 +91,13 @@ void KdbxSalsa20::reload() noexcept{
 	if (++state[8] == 0) state[9]++;
 }
 
-KdbxSalsa20::KdbxSalsa20(const std::vector<uint8_t>& key) noexcept
+Salsa20::Salsa20(const SafeVector<uint8_t>& key) noexcept
 	:bufferPos(buffer.end()){
 
     OSSL::Digest d(EVP_sha256());
-    //SHA256_CTX sha256;
-    //SHA256_Init(&sha256);
     d.update(key.data(), 32);
-    //SHA256_Update(&sha256, key.data(), 32);
 	std::array<uint8_t, 32> keySha256;
     d.final(keySha256);
-    //SHA256_Final(keySha256.data(), &sha256);
-
 
 	uint8_t iv[8]={ 0xE8, 0x30, 0x09, 0x4B,
 		0x97, 0x20, 0x5D, 0x2A };
@@ -121,9 +118,13 @@ KdbxSalsa20::KdbxSalsa20(const std::vector<uint8_t>& key) noexcept
 	state[7] = fromLittleEndian<uint32_t>(&iv[4]);
 	state[8] = 0;
 	state[9] = 0;
+
+    for (unsigned int i=0; i<32; i++){
+        keySha256[i] = 0;
+    }
 }
 
-void KdbxSalsa20::readRaw(uint8_t* dataBegin, uint8_t* dataEnd) noexcept{
+void Salsa20::readRaw(uint8_t* dataBegin, uint8_t* dataEnd) noexcept{
 
    auto copyEnd = bufferPos + std::min<std::ptrdiff_t>(buffer.end() - bufferPos, dataEnd - dataBegin);
    dataBegin = std::copy(bufferPos, copyEnd, dataBegin);
@@ -137,8 +138,8 @@ void KdbxSalsa20::readRaw(uint8_t* dataBegin, uint8_t* dataEnd) noexcept{
    bufferPos = copyEnd;
 }
 
-std::vector<uint8_t> KdbxSalsa20::read(std::size_t size){
-	std::vector<uint8_t> result;
+SafeVector<uint8_t> Salsa20::read(std::size_t size){
+    SafeVector<uint8_t> result;
 	result.reserve(size);
 
 	auto copyEnd = bufferPos + std::min<std::ptrdiff_t>(buffer.end() - bufferPos, size);
@@ -156,7 +157,7 @@ std::vector<uint8_t> KdbxSalsa20::read(std::size_t size){
 
 //--------------------------------------------------------------------------------------------
 
-KdbxArcFourVariant::KdbxArcFourVariant(const std::vector<uint8_t>& key)
+ArcFourVariant::ArcFourVariant(const SafeVector<uint8_t>& key)
 	:m_i(0),
 	   m_j(0)
 {
@@ -173,10 +174,15 @@ KdbxArcFourVariant::KdbxArcFourVariant(const std::vector<uint8_t>& key)
 			keyPos = 0;
 	}
 
-	readFixed<512>();
+    read(512);
 }
 
-void KdbxArcFourVariant::readRaw(uint8_t* begin, uint8_t* end) noexcept{
+ArcFourVariant::~ArcFourVariant(){
+    for (unsigned int i=0; i<256; i++)
+        state[i] = 0;
+}
+
+void ArcFourVariant::readRaw(uint8_t* begin, uint8_t* end) noexcept{
 	using std::swap;
 
 	for (; begin<end; ++begin){
@@ -186,8 +192,8 @@ void KdbxArcFourVariant::readRaw(uint8_t* begin, uint8_t* end) noexcept{
 	}
 }
 
-std::vector<uint8_t> KdbxArcFourVariant::read(std::size_t size){
-	std::vector<uint8_t> result;
+SafeVector<uint8_t> ArcFourVariant::read(std::size_t size){
+    SafeVector<uint8_t> result;
 	result.reserve(size);
 	using std::swap;
 
@@ -197,4 +203,6 @@ std::vector<uint8_t> KdbxArcFourVariant::read(std::size_t size){
 		result.push_back(state[uint8_t(state[m_i] + state[m_j])]);
 	}
 	return result;
+}
+
 }
