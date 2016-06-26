@@ -10,10 +10,12 @@ AC_CONFIG_SRCDIR([src])
 AM_CONFIG_HEADER(src/config.h)
 AX_PREFIX_CONFIG_H([include/libkeepass2pp/keepass2pp_config.h], [KEEPASS2PP])
 
+AC_CONFIG_MACRO_DIR([m4])
+
 AC_CANONICAL_HOST
 
 AM_INIT_AUTOMAKE
-AC_CONFIG_FILES([Makefile src/Makefile include/Makefile keepass2pp.pc])
+AC_CONFIG_FILES([Makefile src/Makefile include/Makefile tests/Makefile keepass2pp.pc])
 
 AC_ARG_ENABLE([assert],
   AS_HELP_STRING([--enable-assert],

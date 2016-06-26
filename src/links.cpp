@@ -79,12 +79,12 @@ OStreamTeeLink::OStreamTeeLink(const std::string& filename) noexcept
 
 void OStreamTeeLink::runThread(){
         Pipeline::BufferPtr inBuffer;
-	while ((inBuffer = read())){
+    while ((inBuffer = read())){
                 ffile->write(reinterpret_cast<const char*>(inBuffer->data().data()), inBuffer->size());
                 write(std::move(inBuffer));
-	}
+    }
         ffile->flush();
-	finish();
+    finish();
 }
 
 //------------------------------------------------------------------------------------
@@ -94,7 +94,7 @@ void EvpCipher::join(Pipeline::OutLink* link, std::size_t maxFill) noexcept{
     const EVP_CIPHER* cipher = EVP_CIPHER_CTX_cipher(ctx);
     assert(cipher);
 
-    maxFill = Pipeline::Buffer::maxSize;
+    //maxFill = Pipeline::Buffer::maxSize;
     if (EVP_CIPHER_block_size(cipher) > 0)
         maxFill -= EVP_CIPHER_block_size(cipher);
     InLink::join(link, maxFill);
@@ -362,14 +362,11 @@ void DeflateLink::runThread(){
     Pipeline::BufferPtr outBuffer(new Pipeline::Buffer(maxFill()));
 
     // ToDo: add allocation functions for safe processing.
+
     Zlib::Deflater strm(level, MAX_WBITS | 16);
     strm->next_out = outBuffer->data().data();
     strm->avail_out = outBuffer->size();
-
-    inBuffer = read();
-    strm->next_in = inBuffer->data().data();
-    strm->avail_in = inBuffer->size();
-
+    strm->avail_in = 0;
 
     int ret;
     while (true){
@@ -405,7 +402,8 @@ void DeflateLink::runThread(){
     }while(ret == Z_OK);
     assert(ret == Z_STREAM_END);
 
-    if (strm->avail_out < maxFill()){
+    if (strm->avail_out < maxFill() &&
+        strm->avail_out != outBuffer->size()){
         outBuffer->setSize(outBuffer->size() - strm->avail_out);
         write(std::move(outBuffer));
     }
