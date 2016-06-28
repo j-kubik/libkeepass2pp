@@ -22,58 +22,72 @@ along with libkeepass2pp.  If not, see <http://www.gnu.org/licenses/>.
 #include "pipeline.h"
 #include "platform.h"
 
-//ToDo:: Istream is inherently blocking. Is this a problem?
+//ToDo:: istream is inherently blocking. Is this a problem?
 class IStreamLink: public Pipeline::OutLink{
 private:
 
         std::unique_ptr<std::istream> ffile;
+        std::string filename;
 
 public:
-        IStreamLink(const std::string& filename) noexcept;
+        inline IStreamLink(std::string filename) noexcept
+            :filename(std::move(filename))
+        {}
 
-        inline IStreamLink(std::unique_ptr<std::istream> file) noexcept
-                :ffile(std::move(file))
+        inline IStreamLink(std::unique_ptr<std::istream> file, std::string filename= std::string()) noexcept
+                :ffile(std::move(file)),
+                  filename(std::move(filename))
         {}
 
         ~IStreamLink(){
             ffile.release();
         }
 
-        virtual void runThread() override;
+        void runThread() override;
 
 };
 
 class OStreamLink: public Pipeline::InLink{
 private:
         std::unique_ptr<std::ostream> ffile;
+        std::string filename;
         std::promise<std::unique_ptr<std::ostream>> finished;
 public:
 
-        OStreamLink(const std::string& filename) noexcept;
+        inline OStreamLink(std::string filename) noexcept
+            :filename(std::move(filename))
+        {}
 
-        inline OStreamLink(std::unique_ptr<std::ostream> file) noexcept
-                :ffile(std::move(file))
+        inline OStreamLink(std::unique_ptr<std::ostream> file, std::string filename= std::string()) noexcept
+                :ffile(std::move(file)),
+                  filename(std::move(filename))
         {}
 
         std::future<std::unique_ptr<std::ostream>> getFuture() noexcept{
             return finished.get_future();
         }
 
-        virtual void runThread() override;
+        void runThread() override;
 
 };
 
 class OStreamTeeLink: public Pipeline::InOutLink{
 private:
         std::unique_ptr<std::ostream> ffile;
-public:
-        OStreamTeeLink(const std::string& filename) noexcept;
+        std::string filename;
 
-        inline OStreamTeeLink(std::unique_ptr<std::ostream> file) noexcept
-                :ffile(std::move(file))
+        void runThread() override;
+public:
+        inline OStreamTeeLink(std::string filename) noexcept
+            :filename(std::move(filename))
         {}
 
-        virtual void runThread() override;
+        inline OStreamTeeLink(std::unique_ptr<std::ostream> file, std::string filename= std::string()) noexcept
+                :ffile(std::move(file)),
+                  filename(std::move(filename))
+        {}
+
+
 
 };
 
@@ -89,24 +103,24 @@ public:
         return ctx;
     }
 
-    virtual void join(Pipeline::OutLink* link, std::size_t maxFill) noexcept override;
+    std::size_t requestedMaxSize() noexcept override;
 
-    virtual void runThread() override;
+    void runThread() override;
 
 };
 
 class HashStreamLink: public Pipeline::InOutLink{
 private:
         const std::array<uint8_t, 32> initBytes;
+
+        std::size_t requestedMaxSize() noexcept override;
+
+        void runThread() override;
 public:
 
         inline HashStreamLink(const std::array<uint8_t,32>& initBytes) noexcept
                 :initBytes(initBytes)
         {}
-
-        virtual void join(Pipeline::OutLink* link, std::size_t maxFill) noexcept override;
-
-        virtual void runThread() override;
 };
 
 class UnhashStreamLink: public Pipeline::InOutLink{
@@ -114,7 +128,7 @@ private:
 	const std::array<uint8_t, 32> initBytes;
 	const bool validate;
 
-    Pipeline::BufferPtr inBuffer;
+    Pipeline::Buffer::Ptr inBuffer;
 	uint8_t* readingFrom;
 	uint8_t* readingTo;
 	uint8_t* writingTo;
@@ -122,35 +136,33 @@ private:
 	void readIn();
 	void writeOut();
 
+    void runThread() override;
 public:
 
 	inline UnhashStreamLink(const std::array<uint8_t,32>& initBytes, bool validate=true) noexcept
 		:initBytes(initBytes),
 		  validate(validate)
 	{}
-
-	virtual void runThread() override;
 };
 
 class DeflateLink: public Pipeline::InOutLink{
 private:
     int level;
 
+    std::size_t requestedMaxSize() noexcept override;
+    void runThread() override;
+
 public:
     inline DeflateLink(int level = 8) noexcept
         :level(level)
     {}
-
-    virtual void join(Pipeline::OutLink* link, std::size_t maxFill) noexcept override;
-
-    virtual void runThread() override;
 };
 
 class InflateLink: public Pipeline::InOutLink{
-public:
-    virtual void join(Pipeline::OutLink* link, std::size_t maxFill) noexcept override;
+private:
+    std::size_t requestedMaxSize() noexcept override;
 
-    virtual void runThread() override;
+    void runThread() override;
 };
 
 

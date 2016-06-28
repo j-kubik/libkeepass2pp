@@ -313,7 +313,7 @@ private:
     virtual int read(char* buffer, int len) override;
     virtual void close() override;
 
-    Pipeline::BufferPtr current;
+    Pipeline::Buffer::Ptr current;
     std::size_t currentPos;
 
     Database::File::Settings fileSettings;
@@ -344,7 +344,7 @@ private:
     int write(const char* buffer, int len) override;
     void close() override;
 
-    Pipeline::BufferPtr current;
+    Pipeline::Buffer::Ptr current;
     std::size_t currentPos;
 
     const Database* database;
@@ -405,14 +405,14 @@ int XmlWriterLink::write(const char* buffer, int len){
 
     int written = 0;
     while (written < len){
-        std::size_t copySize = std::min(len - written, int(Pipeline::Buffer::maxSize - currentPos));
+        std::size_t copySize = std::min(len - written, int(maxSize() - currentPos));
         std::copy(buffer, buffer+copySize, current->data().data() + currentPos);
         written += copySize;
         buffer += copySize;
         currentPos += copySize;
-        if (currentPos == Pipeline::Buffer::maxSize){
+        if (currentPos == maxSize()){
             OutLink::write(std::move(current));
-            current = Pipeline::BufferPtr(new Pipeline::Buffer(Pipeline::Buffer::maxSize));
+            current = Pipeline::Buffer::Ptr(new Pipeline::Buffer(maxSize()));
             currentPos = 0;
         }
     }
@@ -2065,7 +2065,7 @@ void XmlReaderLink::runThread(){
 }
 
 void XmlWriterLink::runThread(){
-        current = Pipeline::BufferPtr(new Pipeline::Buffer(Pipeline::Buffer::maxSize));
+        current = Pipeline::Buffer::Ptr(new Pipeline::Buffer(Pipeline::Buffer::maxSize));
         currentPos = 0;
         XmlWriter writer(this, RandomStream::randomStream(database->settings().fileSettings.crsAlgorithm, fprotectedStreamKey));
         writer.setIndent(findent);

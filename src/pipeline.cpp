@@ -23,13 +23,12 @@ along with libkeepass2pp.  If not, see <http://www.gnu.org/licenses/>.
 #include "../include/libkeepass2pp/pipeline.h"
 #include "../include/libkeepass2pp/util.h"
 
-void Pipeline::Link::runThreadFunc(std::unique_ptr<Link> link) noexcept{
-	try{
-                link->runThread();
-        }catch(...){
-                link->abort(std::current_exception());
-	}
-        //link.release();
+void Pipeline::Link::runThreadFunc(Link::Ptr link) noexcept{
+    try{
+        link->runThread();
+    }catch(...){
+        link->abort(std::current_exception());
+    }
 }
 
 void Pipeline::Link::abort(std::exception_ptr) noexcept{}
@@ -62,7 +61,7 @@ void Pipeline::InLink::abort(std::exception_ptr e) noexcept{
 
     exception = std::move(e);
 
-    std::queue<BufferPtr> tmp;
+    std::queue<Buffer::Ptr> tmp;
     using std::swap;
     swap(tmp, queue);
 
@@ -70,7 +69,7 @@ void Pipeline::InLink::abort(std::exception_ptr e) noexcept{
     condition.notify_one();
 }
 
-Pipeline::BufferPtr Pipeline::InLink::read(){
+Pipeline::Buffer::Ptr Pipeline::InLink::read(){
     std::unique_lock<std::mutex> lock(queueMutex);
 
     // The condition for exception is probably not necesary.
@@ -81,7 +80,7 @@ Pipeline::BufferPtr Pipeline::InLink::read(){
 
     std::size_t queueSize = queue.size();
     if (queueSize){
-        BufferPtr result = std::move(queue.front());
+        Buffer::Ptr result = std::move(queue.front());
         queue.pop();
         lock.unlock();
 
@@ -89,16 +88,16 @@ Pipeline::BufferPtr Pipeline::InLink::read(){
             condition.notify_one();
         return result;
     }
-    return BufferPtr();
+    return Buffer::Ptr();
 }
 
-void Pipeline::InLink::join(OutLink* link, std::size_t maxFill) noexcept{
+void Pipeline::InLink::join(OutLink* link) noexcept{
     assert(connected == false);
     assert(link);
     assert(link->inLink == nullptr);
     link->inLink = this;
-    link->fmaxFill = maxFill;
     connected = true;
+    link->fmaxSize = requestedMaxSize();
 }
 
 
@@ -112,13 +111,9 @@ Pipeline::InLink::~InLink() noexcept{
 
 Pipeline::OutLink::~OutLink() noexcept{
     if (inLink){
-        std::unique_lock<std::mutex> lock(inLink->queueMutex);
-        inLink->connected = false;
-        inLink->condition.notify_one();
-        lock.unlock();
+        finish();
     }
 }
-
 
 void Pipeline::OutLink::abort(std::exception_ptr e) noexcept{
     Link::abort(e);
@@ -137,7 +132,7 @@ void Pipeline::OutLink::abort(std::exception_ptr e) noexcept{
     lock.unlock();
 }
 
-void Pipeline::OutLink::write(BufferPtr ptr){
+void Pipeline::OutLink::write(Buffer::Ptr ptr){
     assert(inLink);
     std::unique_lock<std::mutex> lock(inLink->queueMutex);
     assert(inLink->connected == true);
@@ -160,11 +155,9 @@ void Pipeline::OutLink::finish() noexcept{
     std::unique_lock<std::mutex> lock(inLink->queueMutex);
     assert(inLink->connected == true);
     inLink->connected = false;
-    InLink* tmp = inLink;
-    inLink = nullptr;
-
-    tmp->condition.notify_one();
+    inLink->condition.notify_one();
     lock.unlock();
+    inLink = nullptr;
 }
 
 //--------------------------------------------------------------------------------
@@ -176,54 +169,46 @@ void Pipeline::InOutLink::abort(std::exception_ptr e) noexcept{
 
 //--------------------------------------------------------------------------------
 
-Pipeline::Pipeline()
-{}
-
-void Pipeline::setStart(std::unique_ptr<OutLink> link) noexcept{
+void Pipeline::setStart(OutLink::Ptr link) noexcept{
 	//ToDo: should I disallow circular pipelines?
 	assert(foutLink == 0); //Multiple start links for a pipeline.
 
 	foutLink = std::move(link);
 }
 
-void Pipeline::appendLink(std::unique_ptr<InOutLink> link){
+void Pipeline::appendLink(InOutLink::Ptr link){
 	links.push_back(std::move(link));
 }
 
-void Pipeline::setFinish(std::unique_ptr<InLink> link) noexcept{
+void Pipeline::setFinish(InLink::Ptr link) noexcept{
 	assert(finLink == 0); // multiple finish links for a pipeline.
 
 	finLink = std::move(link);
 }
 
-std::unique_ptr<Pipeline::InLink> Pipeline::takeFinish() noexcept{
-	std::unique_ptr<InLink> result;
-	using std::swap;
-	swap(finLink, result);
-	return result;
-}
-
 void Pipeline::run(){
 
-	assert(finLink);
-	assert(foutLink);
+    assert(finLink);
+    assert(foutLink);
 
     InLink* endLink = finLink.get();
-    std::size_t maxFill = Buffer::maxSize;
-	for (std::vector<std::unique_ptr<InOutLink>>::reverse_iterator I = links.rbegin();
-			I != links.rend(); I++){
-        endLink->join(I->get(), maxFill);
-        maxFill = (*I)->maxFill();
+    for (std::vector<InOutLink::Ptr>::reverse_iterator I = links.rbegin();
+         I != links.rend(); I++){
+        endLink->join(I->get());
         endLink = I->get();
-	}
+    }
 
-    endLink->join(foutLink.get(), foutLink->maxFill());
+    endLink->join(foutLink.get());
 
-        std::thread(&Link::runThreadFunc,std::move(finLink)).detach();
-	for (std::unique_ptr<InOutLink>& link: links){
-            std::thread(&Link::runThreadFunc, std::move(link)).detach();
-	}
-        std::thread(&Link::runThreadFunc, std::move(foutLink)).detach();
+    std::thread(&Link::runThreadFunc,std::move(finLink)).detach();
+    for (InOutLink::Ptr& link: links){
+        std::thread(&Link::runThreadFunc, std::move(link)).detach();
+    }
+    std::thread(&Link::runThreadFunc, std::move(foutLink)).detach();
+
+    finLink = InLink::Ptr();
+    foutLink = OutLink::Ptr();
+    links.clear();
 }
 
 
