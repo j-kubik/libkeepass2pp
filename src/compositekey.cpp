@@ -167,61 +167,61 @@ SafeVector<uint8_t> CompositeKey::getCompositeKey(const std::array<uint8_t, 32>&
 
     for (const Key::Ptr& key: keys){
         d.update(key->data());
-	}
+    }
     d.final(hash);
 
-	//------
+    //------
 
-	const EVP_CIPHER* cipher = EVP_aes_256_ecb();
-	if (EVP_CIPHER_key_length(cipher) != 32){
-		std::ostringstream s;
-		s << "AES with key size other than 32 bytes: " << EVP_CIPHER_key_length(cipher);
-		throw std::runtime_error(s.str());
-	}
+    const EVP_CIPHER* cipher = EVP_aes_256_ecb();
+    if (EVP_CIPHER_key_length(cipher) != 32){
+        std::ostringstream s;
+        s << "AES with key size other than 32 bytes: " << EVP_CIPHER_key_length(cipher);
+        throw std::runtime_error(s.str());
+    }
 
-	if (EVP_CIPHER_block_size(cipher) != 16){
-		std::ostringstream s;
-		s << "AES with block size other than 16 bytes: " << EVP_CIPHER_block_size(cipher);
-		throw std::runtime_error(s.str());
-	}
+    if (EVP_CIPHER_block_size(cipher) != 16){
+        std::ostringstream s;
+        s << "AES with block size other than 16 bytes: " << EVP_CIPHER_block_size(cipher);
+        throw std::runtime_error(s.str());
+    }
 
-	//---------
+    //---------
 
-	{
-        OSSL::EvpCipherCtx aes_ctx;
+    {
+        const unsigned char iv[32] = {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+                                      0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0};
 
-		const unsigned char iv[32] = {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
-									  0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0};
-
-		if (EVP_EncryptInit_ex(aes_ctx, cipher, 0, transformSeed.data(), iv) == 0)
-			throw std::runtime_error("Error initializing AES encryptor for password.");
-
-		EVP_CIPHER_CTX_set_padding(aes_ctx, 0);
+        OSSL::EvpCipher aes_cipher(cipher,
+                                   nullptr,
+                                   transformSeed.data(),
+                                   iv,
+                                   1);
+        aes_cipher.set_padding(false);
 
         SafeVector<uint8_t> encryptedHash(32);
-		int outl;
 
-		for (uint64_t i=0; i<encryptionRounds; i++){
+        for (uint64_t i=0; i<encryptionRounds; i++){
+            int out = aes_cipher.update(encryptedHash.data(), hash.data(), 32);
+            unused(out);
+            assert(out == 32);
+            using std::swap;
+            swap(hash, encryptedHash);
+        }
 
-			if (EVP_EncryptUpdate(aes_ctx, encryptedHash.data(), &outl, hash.data(), 32) == 0)
-				throw std::runtime_error("Error using AES encryptor for password.");
-            assert(outl == 32);
-
-			using std::swap;
-			swap(hash, encryptedHash);
-		}
-
-		if (EVP_EncryptFinal_ex(aes_ctx, encryptedHash.data(), &outl) == 0)
-			throw std::runtime_error("Error finishing AES encryptor for password.");
-
-        assert(outl == 0);
-	}
+        int out = aes_cipher.final(encryptedHash.data());
+        unused(out);
+        assert(out == 0);
+    }
 
     d.init(EVP_sha256());
     d.update(hash);
     d.final(hash);
 
-	return hash;
+    std::cout << "Composite key is: ";
+    outHex(std::cout, &*hash.begin(), &*hash.end());
+    std::cout << std::endl;
+
+    return hash;
 }
 
 }

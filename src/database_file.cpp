@@ -313,7 +313,7 @@ private:
     virtual int read(char* buffer, int len) override;
     virtual void close() override;
 
-    Pipeline::BufferPtr current;
+    Pipeline::Buffer::Ptr current;
     std::size_t currentPos;
 
     Database::File::Settings fileSettings;
@@ -344,7 +344,7 @@ private:
     int write(const char* buffer, int len) override;
     void close() override;
 
-    Pipeline::BufferPtr current;
+    Pipeline::Buffer::Ptr current;
     std::size_t currentPos;
 
     const Database* database;
@@ -405,14 +405,14 @@ int XmlWriterLink::write(const char* buffer, int len){
 
     int written = 0;
     while (written < len){
-        std::size_t copySize = std::min(len - written, int(Pipeline::Buffer::maxSize - currentPos));
+        std::size_t copySize = std::min(len - written, int(maxSize() - currentPos));
         std::copy(buffer, buffer+copySize, current->data().data() + currentPos);
         written += copySize;
         buffer += copySize;
         currentPos += copySize;
-        if (currentPos == Pipeline::Buffer::maxSize){
+        if (currentPos == maxSize()){
             OutLink::write(std::move(current));
-            current = Pipeline::BufferPtr(new Pipeline::Buffer(Pipeline::Buffer::maxSize));
+            current = Pipeline::Buffer::Ptr(new Pipeline::Buffer(maxSize()));
             currentPos = 0;
         }
     }
@@ -2065,7 +2065,7 @@ void XmlReaderLink::runThread(){
 }
 
 void XmlWriterLink::runThread(){
-        current = Pipeline::BufferPtr(new Pipeline::Buffer(Pipeline::Buffer::maxSize));
+        current = Pipeline::Buffer::Ptr(new Pipeline::Buffer(Pipeline::Buffer::maxSize));
         currentPos = 0;
         XmlWriter writer(this, RandomStream::randomStream(database->settings().fileSettings.crsAlgorithm, fprotectedStreamKey));
         writer.setIndent(findent);
@@ -2173,11 +2173,14 @@ std::future<std::unique_ptr<std::ostream>> Database::saveToFile(std::unique_ptr<
         keyHash.update(hash);
         keyHash.final(hash);
 
-        std::unique_ptr<EvpCipher> cipher(new EvpCipher());
-        if (EVP_CipherInit(cipher->context(), EVP_aes_256_cbc(), hash.data(), encryptionIV.data(), 1) == 0)
-            throw std::runtime_error("Error initializing AES256 CBC decryptor.");
-        EVP_CIPHER_CTX_set_padding(cipher->context(), 1);
-        pipeline.appendLink(std::unique_ptr<Pipeline::InOutLink>(std::move(cipher)));
+        OSSL::EvpCipher cipher(EVP_aes_256_cbc(),
+                               nullptr,
+                               hash.data(),
+                               encryptionIV.data(),
+                               1);
+
+        cipher.set_padding(true);
+        pipeline.appendLink(std::unique_ptr<Pipeline::InOutLink>(new EvpCipher(std::move(cipher))));
 
         writeHeader(d, file.get(), HeaderFieldId::CipherID, settings.cipherId.size(), settings.cipherId.data());
         writeHeader(d, file.get(), HeaderFieldId::MasterSeed, masterSeed.size(), masterSeed.data());
@@ -2396,11 +2399,14 @@ std::future<Database::Ptr> Database::File::getDatabase(const CompositeKey& key){
         keyHash.update(hash);
         keyHash.final(hash);
 
-        std::unique_ptr<EvpCipher> cipher(new EvpCipher());
-        if (EVP_CipherInit(cipher->context(), EVP_aes_256_cbc(), hash.data(), encryptionIV.data(), 0) == 0)
-            throw std::runtime_error("Error initializing AES256 CBC decryptor.");
-        EVP_CIPHER_CTX_set_padding(cipher->context(), 1);
-        pipeline.appendLink(std::unique_ptr<Pipeline::InOutLink>(std::move(cipher)));
+
+        OSSL::EvpCipher cipher(EVP_aes_256_cbc(),
+                               nullptr,
+                               hash.data(),
+                               encryptionIV.data(),
+                               0);
+        cipher.set_padding(true);
+        pipeline.appendLink(std::unique_ptr<Pipeline::InOutLink>(new EvpCipher(std::move(cipher))));
     }
 
     pipeline.appendLink(std::unique_ptr<Pipeline::InOutLink>(new UnhashStreamLink(streamStartBytes, true)));

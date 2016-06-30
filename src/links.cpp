@@ -30,17 +30,20 @@ along with libkeepass2pp.  If not, see <http://www.gnu.org/licenses/>.
 #include "../include/libkeepass2pp/links.h"
 
 
-IStreamLink::IStreamLink(const std::string& filename) noexcept
-    :ffile(new std::ifstream(filename))
-{}
-
 void IStreamLink::runThread(){
-    ffile->exceptions ( std::istream::badbit );
+    if (!ffile){
+        std::unique_ptr<std::ifstream> file(new std::ifstream());
+        file->exceptions(std::istream::badbit);
+        file->open(filename);
+        ffile = std::move(file);
+    }else{
+        ffile->exceptions(std::istream::badbit);
+    }
 
-    Pipeline::BufferPtr buffer;
+    Pipeline::Buffer::Ptr buffer;
     while (*ffile){
-        buffer = Pipeline::BufferPtr(new Pipeline::Buffer());
-        ffile->read(reinterpret_cast<char*>(buffer->data().data()), maxFill());
+        buffer = Pipeline::Buffer::Ptr(new Pipeline::Buffer());
+        ffile->read(reinterpret_cast<char*>(buffer->data().data()), maxSize());
         if (!ffile->gcount()){
             break;
         }
@@ -53,13 +56,18 @@ void IStreamLink::runThread(){
 
 //------------------------------------------------------------------------------------
 
-OStreamLink::OStreamLink(const std::string& filename) noexcept
-        :ffile(new std::ofstream(filename))
-{}
-
 void OStreamLink::runThread(){
     try{
-        Pipeline::BufferPtr inBuffer;
+        if (!ffile){
+            std::unique_ptr<std::ofstream> file(new std::ofstream());
+            file->exceptions(std::ostream::badbit);
+            file->open(filename);
+            ffile = std::move(file);
+        }else{
+            ffile->exceptions(std::ostream::badbit);
+        }
+
+        Pipeline::Buffer::Ptr inBuffer;
         while ((inBuffer = read())){
             ffile->write(reinterpret_cast<const char*>(inBuffer->data().data()), inBuffer->size());
         }
@@ -73,32 +81,32 @@ void OStreamLink::runThread(){
 
 //------------------------------------------------------------------------------------
 
-OStreamTeeLink::OStreamTeeLink(const std::string& filename) noexcept
-        :ffile(new std::ofstream(filename))
-{}
-
 void OStreamTeeLink::runThread(){
-        Pipeline::BufferPtr inBuffer;
-    while ((inBuffer = read())){
-                ffile->write(reinterpret_cast<const char*>(inBuffer->data().data()), inBuffer->size());
-                write(std::move(inBuffer));
+    if (!ffile){
+        std::unique_ptr<std::ofstream> file(new std::ofstream());
+        file->exceptions(std::ostream::badbit);
+        file->open(filename);
+        ffile = std::move(file);
+    }else{
+        ffile->exceptions(std::ostream::badbit);
     }
-        ffile->flush();
+
+    Pipeline::Buffer::Ptr inBuffer;
+    while ((inBuffer = read())){
+        ffile->write(reinterpret_cast<const char*>(inBuffer->data().data()), inBuffer->size());
+        write(std::move(inBuffer));
+    }
+    ffile->flush();
     finish();
 }
 
 //------------------------------------------------------------------------------------
 
-void EvpCipher::join(Pipeline::OutLink* link, std::size_t maxFill) noexcept{
-
-    const EVP_CIPHER* cipher = EVP_CIPHER_CTX_cipher(ctx);
-    assert(cipher);
-
-    //maxFill = Pipeline::Buffer::maxSize;
-    if (EVP_CIPHER_block_size(cipher) > 0)
-        maxFill -= EVP_CIPHER_block_size(cipher);
-    InLink::join(link, maxFill);
-
+std::size_t EvpCipher::requestedMaxSize() noexcept{
+    std::size_t mSize = maxSize();
+    if (cipher.block_size() > 0)
+        mSize -= cipher.block_size();
+    return mSize;
 }
 
 #ifndef NDEBUG
@@ -117,28 +125,24 @@ LoadSSLCryptoStrings l;
 #endif
 
 void EvpCipher::runThread(){
-    Pipeline::BufferPtr inBuffer;
-    Pipeline::BufferPtr outBuffer(new Pipeline::Buffer());
-    int outFill;
+    Pipeline::Buffer::Ptr inBuffer;
+    Pipeline::Buffer::Ptr outBuffer(new Pipeline::Buffer());
 
     while ((inBuffer = read())){
-            assert(inBuffer->size() + EVP_CIPHER_CTX_block_size(ctx) <= Pipeline::Buffer::maxSize);
+            assert(inBuffer->size() + cipher.block_size() <= maxSize());
 
-            if (EVP_CipherUpdate(ctx, outBuffer->data().data(), &outFill, inBuffer->data().data(), inBuffer->size()) == 0)
-                    throw OSSL::exception();
+            std::size_t outSize = cipher.update(outBuffer->data().data(), inBuffer->data().data(), inBuffer->size());
 
-            assert(std::size_t(outFill) < Pipeline::Buffer::maxSize);
-            outBuffer->setSize(std::size_t(outFill));
+            assert(std::size_t(outSize) < maxSize());
+            outBuffer->setSize(outSize);
             write(std::move(outBuffer));
             using std::swap;
             swap(outBuffer, inBuffer);
-
     }
 
-    if (EVP_CipherFinal(ctx, outBuffer->data().data(), &outFill) == 0)
-        throw OSSL::exception();
-    if (outFill){
-            outBuffer->setSize(outFill);
+    std::size_t outSize = cipher.final(outBuffer->data().data());
+    if (outSize){
+            outBuffer->setSize(outSize);
             write(std::move(outBuffer));
     }
 
@@ -148,26 +152,26 @@ void EvpCipher::runThread(){
 
 //-------------------------------------------------------------------------------------
 
-void HashStreamLink::join(Pipeline::OutLink* link, std::size_t maxFill) noexcept{
-    InLink::join(link, Pipeline::Buffer::maxSize);
+std::size_t HashStreamLink::requestedMaxSize() noexcept{
+    return Pipeline::Buffer::maxSize;
 }
 
 void HashStreamLink::runThread(){
 
-    Pipeline::BufferPtr outBuffer(new Pipeline::Buffer());
+    Pipeline::Buffer::Ptr outBuffer(new Pipeline::Buffer());
     std::copy(initBytes.begin(), initBytes.end(), outBuffer->data().begin());
     outBuffer->setSize(initBytes.size());
     write(std::move(outBuffer));
 
     uint32_t blockIndex = 0;
 
-    Pipeline::BufferPtr inBuffer;
+    Pipeline::Buffer::Ptr inBuffer;
     uint8_t* readAt = nullptr;
     uint8_t* readEnd = nullptr;
 
-    outBuffer = Pipeline::BufferPtr(new Pipeline::Buffer(maxFill()));
+    outBuffer = Pipeline::Buffer::Ptr(new Pipeline::Buffer(maxSize()));
     uint8_t* writeAt = (outBuffer->data().data() + 40);
-    uint8_t* writeEnd = (outBuffer->data().data() + maxFill());
+    uint8_t* writeEnd = (outBuffer->data().data() + maxSize());
     do{
 
         if (readAt == readEnd){
@@ -196,9 +200,9 @@ void HashStreamLink::runThread(){
             ++ blockIndex;
 
             write(std::move(outBuffer));
-            outBuffer = Pipeline::BufferPtr(new Pipeline::Buffer(maxFill()));
+            outBuffer = Pipeline::Buffer::Ptr(new Pipeline::Buffer(maxSize()));
             writeAt = (outBuffer->data().data() + 40);
-            writeEnd = (outBuffer->data().data() + maxFill());
+            writeEnd = (outBuffer->data().data() + maxSize());
         }
 
 //        SHA256_CTX sha256;
@@ -223,7 +227,7 @@ void HashStreamLink::runThread(){
         write(std::move(outBuffer));
     }
 
-    outBuffer = Pipeline::BufferPtr(new Pipeline::Buffer(40));
+    outBuffer = Pipeline::Buffer::Ptr(new Pipeline::Buffer(40));
     toLittleEndian<uint32_t>(blockIndex, outBuffer->data().data());
     std::fill(outBuffer->data().begin() + 4,outBuffer->data().begin()+40, 0);
     write(std::move(outBuffer));
@@ -235,53 +239,53 @@ void HashStreamLink::runThread(){
 //-------------------------------------------------------------------------------------
 
 void UnhashStreamLink::readIn(){
-	if (!(inBuffer = read()))
-		throw std::runtime_error("Unexpected end of stream.");
+    if (!(inBuffer = read()))
+        throw std::runtime_error("Unexpected end of stream.");
 
-	readingFrom = inBuffer->data().data();
-	readingTo = inBuffer->data().data() + inBuffer->size();
-	writingTo = readingFrom;
+    readingFrom = inBuffer->data().data();
+    readingTo = inBuffer->data().data() + inBuffer->size();
+    writingTo = readingFrom;
 }
 
 void UnhashStreamLink::writeOut(){
-	if (writingTo > inBuffer->data().data()){
-		inBuffer->setSize(writingTo-inBuffer->data().data());
-		write(std::move(inBuffer));
-	}
+    if (writingTo > inBuffer->data().data()){
+        inBuffer->setSize(writingTo-inBuffer->data().data());
+        write(std::move(inBuffer));
+    }
 }
 
 void UnhashStreamLink::runThread(){
 
-	uint32_t blockIndex = 0;
+    uint32_t blockIndex = 0;
 
-	std::size_t chunkSize;
+    std::size_t chunkSize;
 
     //ToDo: base init bytes size on provided data...
-	{
-		std::array<uint8_t, 32> encryptedInitBytes;
-		std::size_t initBytesRead = 0;
+    {
+        std::array<uint8_t, 32> encryptedInitBytes;
+        std::size_t initBytesRead = 0;
 
-		while (initBytesRead < 32){
-			readIn();
-			chunkSize = std::min(std::size_t(readingTo - readingFrom), 32 - initBytesRead);
-			std::copy(readingFrom,
-					  readingFrom + chunkSize,
-					  encryptedInitBytes.begin() + initBytesRead);
+        while (initBytesRead < 32){
+            readIn();
+            chunkSize = std::min(std::size_t(readingTo - readingFrom), 32 - initBytesRead);
+            std::copy(readingFrom,
+                      readingFrom + chunkSize,
+                      encryptedInitBytes.begin() + initBytesRead);
 
-			initBytesRead += chunkSize;
-			readingFrom += chunkSize;
-		}
-		//if (initBytesRead < 32)
-		//	throw std::runtime_error("Unexpected end of stream.");
+            initBytesRead += chunkSize;
+            readingFrom += chunkSize;
+        }
+        //if (initBytesRead < 32)
+        //	throw std::runtime_error("Unexpected end of stream.");
 
-		auto match = std::mismatch(encryptedInitBytes.begin(), encryptedInitBytes.end(), initBytes.begin());
-		if (match != std::make_pair(encryptedInitBytes.end(), initBytes.end())){
-			throw std::runtime_error("Incorrect composed key.");
-		}
+        auto match = std::mismatch(encryptedInitBytes.begin(), encryptedInitBytes.end(), initBytes.begin());
+        if (match != std::make_pair(encryptedInitBytes.end(), initBytes.end())){
+            throw std::runtime_error("Incorrect composed key.");
+        }
 
-	}
+    }
 
-	std::size_t blockSize;
+    std::size_t blockSize;
 
     do{
 
@@ -310,7 +314,7 @@ void UnhashStreamLink::runThread(){
 
         if (blockSize == 0){
             if (std::any_of(&rawHeader[4], &rawHeader[36], [](uint8_t value)->bool{ return value != 0; }))
-                throw std::runtime_error("Stream data corrupted 2.");
+                throw std::runtime_error("Stream data corrupted.");
             break;
         }
 
@@ -341,7 +345,7 @@ void UnhashStreamLink::runThread(){
         d.final(dataHash);
 
         if (!std::equal(dataHash.begin(), dataHash.end(), &rawHeader[4]))
-            throw std::runtime_error("Stream data corrupted 1.");
+            throw std::runtime_error("Stream data corrupted.");
 
     }while(true);
 
@@ -352,14 +356,14 @@ void UnhashStreamLink::runThread(){
 
 //-------------------------------------------------------------------------------------
 
-void DeflateLink::join(Pipeline::OutLink* link, std::size_t) noexcept{
-    InLink::join(link, Pipeline::Buffer::maxSize);
+std::size_t DeflateLink::requestedMaxSize() noexcept{
+    return Pipeline::Buffer::maxSize;
 }
 
 void DeflateLink::runThread(){
 
-    Pipeline::BufferPtr inBuffer;
-    Pipeline::BufferPtr outBuffer(new Pipeline::Buffer(maxFill()));
+    Pipeline::Buffer::Ptr inBuffer;
+    Pipeline::Buffer::Ptr outBuffer(new Pipeline::Buffer(maxSize()));
 
     // ToDo: add allocation functions for safe processing.
 
@@ -382,7 +386,7 @@ void DeflateLink::runThread(){
 
         if (strm->avail_out == 0){
             write(std::move(outBuffer));
-            outBuffer = Pipeline::BufferPtr(new Pipeline::Buffer(maxFill()));
+            outBuffer = Pipeline::Buffer::Ptr(new Pipeline::Buffer(maxSize()));
             strm->next_out = outBuffer->data().data();
             strm->avail_out = outBuffer->size();
         }
@@ -394,7 +398,7 @@ void DeflateLink::runThread(){
     do{
         if (strm->avail_out == 0){
             write(std::move(outBuffer));
-            outBuffer = Pipeline::BufferPtr(new Pipeline::Buffer(maxFill()));
+            outBuffer = Pipeline::Buffer::Ptr(new Pipeline::Buffer(maxSize()));
             strm->next_out = outBuffer->data().data();
             strm->avail_out = outBuffer->size();
         }
@@ -402,7 +406,7 @@ void DeflateLink::runThread(){
     }while(ret == Z_OK);
     assert(ret == Z_STREAM_END);
 
-    if (strm->avail_out < maxFill() &&
+    if (strm->avail_out < maxSize() &&
         strm->avail_out != outBuffer->size()){
         outBuffer->setSize(outBuffer->size() - strm->avail_out);
         write(std::move(outBuffer));
@@ -414,73 +418,73 @@ void DeflateLink::runThread(){
 
 //-------------------------------------------------------------------------------------
 
-void InflateLink::join(Pipeline::OutLink* link, std::size_t) noexcept{
-    InLink::join(link, Pipeline::Buffer::maxSize);
+std::size_t InflateLink::requestedMaxSize() noexcept{
+    return Pipeline::Buffer::maxSize;
 }
 
 void InflateLink::runThread(){
 
-        Pipeline::BufferPtr inBuffer;
-        Pipeline::BufferPtr outBuffer;
+        Pipeline::Buffer::Ptr inBuffer;
+        Pipeline::Buffer::Ptr outBuffer;
 
     Zlib::Inflater strm(MAX_WBITS | 16);
 
-    outBuffer = Pipeline::BufferPtr(new Pipeline::Buffer());
-	strm->next_out = outBuffer->data().data();
-	strm->avail_out = outBuffer->size();
+    outBuffer = Pipeline::Buffer::Ptr(new Pipeline::Buffer());
+    strm->next_out = outBuffer->data().data();
+    strm->avail_out = outBuffer->size();
 
-	inBuffer = read();
-	strm->next_in = inBuffer->data().data();
-	strm->avail_in = inBuffer->size();
+    inBuffer = read();
+    strm->next_in = inBuffer->data().data();
+    strm->avail_in = inBuffer->size();
 
-	int ret;
-	do{
+    int ret;
+    do{
 
-		if (strm->avail_in == 0){
-			inBuffer = read();
-			if (!inBuffer)
-				throw std::runtime_error("Unexpected end of stream.");
-			strm->next_in = inBuffer->data().data();
-			strm->avail_in = inBuffer->size();
-		}
+        if (strm->avail_in == 0){
+            inBuffer = read();
+            if (!inBuffer)
+                throw std::runtime_error("Unexpected end of stream.");
+            strm->next_in = inBuffer->data().data();
+            strm->avail_in = inBuffer->size();
+        }
 
-		if (strm->avail_out == 0){
+        if (strm->avail_out == 0){
 
             write(std::move(outBuffer));
-            outBuffer = Pipeline::BufferPtr(new Pipeline::Buffer());
-            outBuffer->setSize(maxFill());
+            outBuffer = Pipeline::Buffer::Ptr(new Pipeline::Buffer());
+            outBuffer->setSize(maxSize());
 
-			strm->next_out = outBuffer->data().data();
-            strm->avail_out = maxFill();
-		}
+            strm->next_out = outBuffer->data().data();
+            strm->avail_out = maxSize();
+        }
 
-		ret = inflate(strm, Z_NO_FLUSH);
-		assert(ret != Z_STREAM_ERROR);  /* state not clobbered */
+        ret = inflate(strm, Z_NO_FLUSH);
+        assert(ret != Z_STREAM_ERROR);  /* state not clobbered */
 
-		switch (ret) {
-		case Z_STREAM_END:
-		case Z_BUF_ERROR:
-		case Z_OK:
-			break;
+        switch (ret) {
+        case Z_STREAM_END:
+        case Z_BUF_ERROR:
+        case Z_OK:
+            break;
 
-		case Z_NEED_DICT:
-			ret = Z_DATA_ERROR;     /* and fall through */
-			//			case Z_DATA_ERROR:
-			//			case Z_MEM_ERROR:
-		default:
+        case Z_NEED_DICT:
+            ret = Z_DATA_ERROR;     /* and fall through */
+            //			case Z_DATA_ERROR:
+            //			case Z_MEM_ERROR:
+        default:
             Zlib::Inflater::throwError("Error decompressing the data.", ret, strm->msg);
-		}
+        }
 
-	}while (ret != Z_STREAM_END);
+    }while (ret != Z_STREAM_END);
 
-	assert(!read());
+    assert(!read());
 
-    if (strm->avail_out < maxFill()){
-        outBuffer->setSize(maxFill() - strm->avail_out);
-		write(std::move(outBuffer));
-	}
+    if (strm->avail_out < maxSize()){
+        outBuffer->setSize(maxSize() - strm->avail_out);
+        write(std::move(outBuffer));
+    }
 
-	finish();
+    finish();
 }
 
 //-------------------------------------------------------------------------------------
