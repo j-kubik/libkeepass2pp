@@ -130,9 +130,9 @@ private:
     const bool validate;
 
     Pipeline::Buffer::Ptr inBuffer;
-    uint8_t* readingFrom;
-    uint8_t* readingTo;
-    uint8_t* writingTo;
+	uint8_t* readingFrom;
+	uint8_t* readingTo;
+	uint8_t* writingTo;
 
     void readIn();
     void writeOut();
@@ -140,10 +140,10 @@ private:
     void runThread() override;
 public:
 
-    inline UnhashStreamLink(const std::array<uint8_t,32>& initBytes, bool validate=true) noexcept
-        :initBytes(initBytes),
-          validate(validate)
-    {}
+	inline UnhashStreamLink(const std::array<uint8_t,32>& initBytes, bool validate=true) noexcept
+		:initBytes(initBytes),
+		  validate(validate)
+	{}
 };
 
 class DeflateLink: public Pipeline::InOutLink{

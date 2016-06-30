@@ -106,6 +106,7 @@ std::size_t EvpCipher::requestedMaxSize() noexcept{
     std::size_t mSize = maxSize();
     if (cipher.block_size() > 0)
         mSize -= cipher.block_size();
+
     return mSize;
 }
 
@@ -135,6 +136,7 @@ void EvpCipher::runThread(){
 
             assert(std::size_t(outSize) < maxSize());
             outBuffer->setSize(outSize);
+
             write(std::move(outBuffer));
             using std::swap;
             swap(outBuffer, inBuffer);
@@ -187,12 +189,8 @@ void HashStreamLink::runThread(){
         readAt += toCopy;
 
         if (writeAt == writeEnd){
-            //SHA256_CTX sha256;
-            //SHA256_Init(&sha256);
             OSSL::Digest d(EVP_sha256());
-            //SHA256_Update(&sha256, outBuffer->data().data() + 40, outBuffer->size() - 40);
             d.update(outBuffer->data().data() + 40, outBuffer->size() - 40);
-            //SHA256_Final(outBuffer->data().data() + 4, &sha256);
             d.final(outBuffer->data().data() + 4);
 
             toLittleEndian<uint32_t>(outBuffer->size() - 40, outBuffer->data().data() + 36);
@@ -205,19 +203,14 @@ void HashStreamLink::runThread(){
             writeEnd = (outBuffer->data().data() + maxSize());
         }
 
-//        SHA256_CTX sha256;
-//        SHA256_Init(&sha256);
 
     }while(true);
 
     if (writeAt != outBuffer->data().data() + 40){
-        //SHA256_CTX sha256;
-        //SHA256_Init(&sha256);
+
         OSSL::Digest d(EVP_sha256());
         int lastSize = writeAt - outBuffer->data().data();
-        //SHA256_Update(&sha256, outBuffer->data().data() + 40, lastSize - 40);
-        d.update(outBuffer->data().data() + 40, lastSize - 40);
-        //SHA256_Final(outBuffer->data().data() + 4, &sha256);
+         d.update(outBuffer->data().data() + 40, lastSize - 40);
         d.final(outBuffer->data().data() + 4);
 
         toLittleEndian<uint32_t>(lastSize - 40, outBuffer->data().data() + 36);
@@ -275,8 +268,6 @@ void UnhashStreamLink::runThread(){
             initBytesRead += chunkSize;
             readingFrom += chunkSize;
         }
-        //if (initBytesRead < 32)
-        //	throw std::runtime_error("Unexpected end of stream.");
 
         auto match = std::mismatch(encryptedInitBytes.begin(), encryptedInitBytes.end(), initBytes.begin());
         if (match != std::make_pair(encryptedInitBytes.end(), initBytes.end())){
@@ -318,15 +309,11 @@ void UnhashStreamLink::runThread(){
             break;
         }
 
-
-        //SHA256_CTX sha256;
-        //SHA256_Init(&sha256);
         OSSL::Digest d(EVP_sha256());
         std::size_t blockRead = 0;
 
         while (blockRead < blockSize){
             chunkSize = std::min(std::size_t(readingTo - readingFrom), blockSize-blockRead);
-            //SHA256_Update(&sha256, readingFrom, chunkSize);
             d.update(readingFrom, chunkSize);
 
             if (readingFrom > writingTo)
@@ -341,7 +328,6 @@ void UnhashStreamLink::runThread(){
             }
         }
         std::array<uint8_t, 32> dataHash;
-        //SHA256_Final(dataHash.data(), &sha256);
         d.final(dataHash);
 
         if (!std::equal(dataHash.begin(), dataHash.end(), &rawHeader[4]))
@@ -456,22 +442,22 @@ void InflateLink::runThread(){
 
             strm->next_out = outBuffer->data().data();
             strm->avail_out = maxSize();
-        }
+		}
 
-        ret = inflate(strm, Z_NO_FLUSH);
-        assert(ret != Z_STREAM_ERROR);  /* state not clobbered */
+		ret = inflate(strm, Z_NO_FLUSH);
+		assert(ret != Z_STREAM_ERROR);  /* state not clobbered */
 
-        switch (ret) {
-        case Z_STREAM_END:
-        case Z_BUF_ERROR:
-        case Z_OK:
-            break;
+		switch (ret) {
+		case Z_STREAM_END:
+		case Z_BUF_ERROR:
+		case Z_OK:
+			break;
 
-        case Z_NEED_DICT:
-            ret = Z_DATA_ERROR;     /* and fall through */
-            //			case Z_DATA_ERROR:
-            //			case Z_MEM_ERROR:
-        default:
+		case Z_NEED_DICT:
+			ret = Z_DATA_ERROR;     /* and fall through */
+			//			case Z_DATA_ERROR:
+			//			case Z_MEM_ERROR:
+		default:
             Zlib::Inflater::throwError("Error decompressing the data.", ret, strm->msg);
         }
 
