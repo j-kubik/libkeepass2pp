@@ -599,8 +599,10 @@ public:
         {}
 
         /** @brief Adds a version into a database.
-         * @param model Database model object that owns database that takes
-         *        ownership of this version object or nullptr.
+         * @param database Database that takes ownership of this version object.
+         *        This pointer cannot be nullptr;
+         * @param args Additional parameters. For now, it can only be empty, or
+         *        a pointer to a DatabaseModel object that manges the database.
          *
          * Internal function called when inserting version, entry or group into
          * a database.
@@ -946,7 +948,8 @@ public:
          * @param index Represents a position at which new version is inserted into
          *        entries internal version list. Valid indexes are in [0, versions()].
          * @param model Database model object that owns database that takes
-         *        ownership of this version object. This pointer cannot be nullptr.
+         *        ownership of this version object. This pointer cannot be
+         *        nullptr.
          *
          * Internal function called when inserting a version into entry owned
          * by a database using a database model.
@@ -961,9 +964,12 @@ public:
          */
         void clearDatabase();
 
-        /** @brief Internal function called when inserting an entry into database.
-         * @param model Database model that takes ownership of this entry object.
-         *        This pointer cannot be nullptr.
+        /** @brief Internal function called when inserting an entry into a
+         *         database.
+         * @param database Database that takes ownership of this version object.
+         *        This pointer cannot be nullptr;
+         * @param args Additional parameters. For now, it can only be empty, or
+         *        a pointer to a DatabaseModel object that manges the database.
          *
          * Internal function called when inserting an entry into database.
          * It ensures that database model object gets notified of any metadata updates
@@ -1470,8 +1476,10 @@ public:
         void clearDatabase() noexcept;
 
         /** @brief Internal function called when inserting a group into database.
-         * @param model Database model that takes ownership of this group object.
-         *        This pointer cannot be nullptr.
+         * @param database Database that takes ownership of this version object.
+         *        This pointer cannot be nullptr;
+         * @param args Additional parameters. For now, it can only be empty, or
+         *        a pointer to a DatabaseModel object that manges the database.
          *
          * Internal function called when inserting a group into database.
          * It ensures that database model object gets notified of any metadata updates
@@ -1534,8 +1542,8 @@ public:
          * @param index Represents a position at which new group is inserted
          *        into group's internal sub-groups list. Valid indexes are in
          *        [0, groups()].
-         * @param model Database model object that owns this group object or
-         *        nullptr.
+         * @param model Database model object that owns this group object. This
+         *        pointer cannot be nullptr.
          *
          * Internal function called when inserting a sub-group into group owned
          * by a database model.
@@ -1545,11 +1553,11 @@ public:
         void addGroup(Group::Ptr group, size_t index, DatabaseModel* model);
 
         /** @brief Adds an entry into a database.
-         * @param model Database model object that owns this group object. This pointer
-         *        cannot be nullptr.
          * @param entry An owning pointer to an entry object. This parameter cannot be \p nullptr.
          * @param index Represents a position at which new entry is inserted into
          *        group's internal sub-entries list. Valid indexes are in [0, entries()].
+         * @param model Database model object that owns this group object. This
+         *        pointer cannot be nullptr.
          *
          * Internal function called when inserting an entry into group owned
          * by a database model.
