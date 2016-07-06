@@ -95,7 +95,7 @@ Salsa20::Salsa20(const SafeVector<uint8_t>& key) noexcept
 	:bufferPos(buffer.end()){
 
     OSSL::Digest d(EVP_sha256());
-    d.update(key.data(), 32);
+    d.update(key.data(), key.size());
 	std::array<uint8_t, 32> keySha256;
     d.final(keySha256);
 
@@ -122,6 +122,14 @@ Salsa20::Salsa20(const SafeVector<uint8_t>& key) noexcept
     for (unsigned int i=0; i<32; i++){
         keySha256[i] = 0;
     }
+}
+
+Salsa20::~Salsa20(){
+    for (uint32_t& i: state)
+        i = 0;
+
+    for (uint8_t& i: buffer)
+        i = 0;
 }
 
 void Salsa20::readRaw(uint8_t* dataBegin, uint8_t* dataEnd) noexcept{
@@ -169,7 +177,7 @@ ArcFourVariant::ArcFourVariant(const SafeVector<uint8_t>& key)
 	using std::swap;
 	for (unsigned int i=0; i<256; i++){
 		j += state[i] + key[keyPos++];
-		swap(state[0], state[j]);
+        swap(state[0], state[j]);
 		if (keyPos >= key.size())
 			keyPos = 0;
 	}

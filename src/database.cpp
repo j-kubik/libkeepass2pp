@@ -16,8 +16,26 @@ You should have received a copy of the GNU General Public License
 along with libkeepass2pp.  If not, see <http://www.gnu.org/licenses/>.
 */
 #include "../include/libkeepass2pp/databasemodel.h"
+#include <algorithm>
 
 namespace Kdbx{
+
+static inline Kdbx::Icon insertIcon(Kdbx::Icon icon, Kdbx::Database* database){
+    if (icon.type() == Icon::Type::Custom){
+        return database->addCustomIcon(icon.custom());
+    }
+    return icon;
+}
+
+static inline Kdbx::Icon insertIcon(Kdbx::Icon icon, Kdbx::Database* database, DatabaseModel* model){
+    unused(database);
+    if (icon.type() == Icon::Type::Custom){
+        return model->addCustomIcon(icon.custom());
+    }
+    return icon;
+}
+
+//------------------------------------------------------------------------------
 
 void Database::Settings::setName(std::string name) noexcept{
     if (name != fname){
@@ -43,17 +61,11 @@ void Database::Settings::setDefaultUsername(std::string username) noexcept{
     }
 }
 
-//----------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 
-void Database::Version::setDatabase(Database* database){
-    if (icon.type() == Icon::Type::Custom){
-        icon = database->addCustomIcon(icon.custom());
-    }
-}
-
-void Database::Version::setDatabase(BasicDatabaseModel* model){
-    if (icon.type() == Icon::Type::Custom)
-        icon = model->addCustomIcon(icon.custom());
+template <typename ...Args>
+void Database::Version::setDatabase(Database* database, Args... args){
+    icon = insertIcon(icon, database, args...);
 }
 
 size_t Database::Version::index() const noexcept{
@@ -82,58 +94,179 @@ Database::Entry::Entry(const Entry& entry)
 }
 
 void Database::Entry::addVersion(Version::Ptr version, size_t index){
+    version->fparent = this;
+
     if (parent() && parent()->fdatabase)
         version->setDatabase(parent()->fdatabase);
-    version->fparent = this;
     fversions.insert(fversions.begin()+index, std::move(version));
 }
 
-void Database::Entry::addVersion(Version::Ptr version, size_t index, BasicDatabaseModel* model){
+void Database::Entry::addVersion(Version::Ptr version, size_t index, DatabaseModel* model){
     version->fparent = this;
-    version->setDatabase(model);
+    version->setDatabase(fparent->fdatabase, model);
+
     fversions.insert(fversions.begin()+index, std::move(version));
 }
 
-void Database::Entry::clearDatabase(Database* database){
-    database->fdeletedObjects[fuuid] = time(nullptr);
+Database::Version::Ptr Database::Entry::takeVersion(size_t index) noexcept{
+    assert(fversions.size() > 1);
+    Version::Ptr result = std::move(fversions.at(index));
+    fversions.erase(fversions.begin() + index);
+    result->fparent = 0;
+    return result;
 }
 
-void Database::Entry::setDatabase(Database* database){
+void Database::Entry::clearDatabase(){
+    fparent->fdatabase->fdeletedObjects[fuuid] = time(nullptr);
+}
+
+template <typename ...Args>
+void Database::Entry::setDatabase(Database* database, Args... args){
+
     auto del = database->fdeletedObjects.find(fuuid);
     if (del != database->fdeletedObjects.end()){
         database->fdeletedObjects.erase(del);
     }
 
     for (const Version::Ptr& version: fversions){
-        version->setDatabase(database);
+        version->setDatabase(database, args...);
     }
 
-}
-
-void Database::Entry::setDatabase(Database* database, BasicDatabaseModel* model){
-    auto del = database->fdeletedObjects.find(fuuid);
-    if (del != database->fdeletedObjects.end()){
-        database->fdeletedObjects.erase(del);
-    }
-
-    for (const Version::Ptr& version: fversions){
-        version->setDatabase(model);
-    }
 }
 
 //-----------------------------------------------------------------------------------
 
+Database::Group::Group(const Group& group)
+    :fparent(nullptr),
+      fdatabase(nullptr),
+      fuuid(Uuid::generate()),
+      fproperties(new Properties(*group.fproperties))
+{
+    fentries.reserve(group.fentries.size());
+    for (const Entry::Ptr& entry: group.fentries){
+        Entry* e = new Entry(*entry);
+        e->fparent = this;
+        fentries.emplace_back(e);
+    }
+
+    fgroups.reserve(group.fgroups.size());
+    for (const Group::Ptr& gr: group.fgroups){
+        Group* g = new Group(*gr);
+        g->fparent = this;
+        g->fdatabase = nullptr;
+        fgroups.emplace_back(g);
+    }
+}
+
+bool Database::Group::ancestor(const Group* group) const noexcept{
+    const Group* g = parent();
+    while (g){
+        if (g == group)
+            return true;
+        g = g->parent();
+    }
+    return false;
+}
+
+size_t Database::Group::index(const Group* g) const noexcept{
+    for (size_t i=0; i<groups(); ++i){
+        if (group(i) == g)
+            return i;
+    }
+    assert("Subgroup not present." == nullptr);
+    return 0;
+}
+
+size_t Database::Group::index(const Entry* e) const noexcept{
+    for (size_t i=0; i<entries(); ++i){
+        if (entry(i) == e)
+            return i;
+    }
+    assert("Entry not present." == nullptr);
+    return 0;
+}
+
+void Database::Group::addGroup(Group::Ptr group, size_t index){
+    assert(index <= groups());
+    assert(group->fparent == nullptr);
+
+    group->fparent = this;
+    if (fdatabase)
+        group->setDatabase(fdatabase);
+    fgroups.insert(fgroups.begin()+index, std::move(group));
+}
+
+Database::Group::Ptr Database::Group::takeGroup(size_t index) noexcept{
+    assert(index < groups());
+
+    Group::Ptr result(std::move(fgroups.at(index)));
+    fgroups.erase(fgroups.begin()+index);
+    result->fparent = nullptr;
+    result->clearDatabase();
+    return result;
+}
+
+void Database::Group::moveGroup(size_t index, Group* newParent, size_t newIndex){
+    assert(index < groups());
+    assert(newParent != nullptr);
+    assert(fdatabase == newParent->fdatabase);
+    assert(newParent->ancestor(group(index)) == false && newParent != group(index));
+    assert(newIndex <= newParent->groups());
+    assert(this != newParent || (newIndex != index && newIndex != index+1));
+
+    Group::Ptr group(std::move(fgroups.at(index)));
+    fgroups.erase(fgroups.begin()+index);
+
+    if (newParent == this && newIndex > index)
+        newIndex--;
+
+    group->fparent = newParent;
+    newParent->fgroups.insert(newParent->fgroups.begin()+newIndex, std::move(group));
+}
+
+void Database::Group::addEntry(Entry::Ptr entry, size_t index){
+    entry->fparent = this;
+    if (fdatabase)
+        entry->setDatabase(fdatabase);
+    fentries.insert(fentries.begin()+index, std::move(entry));
+}
+
+Database::Entry::Ptr Database::Group::takeEntry(size_t index) noexcept{
+    Entry::Ptr result(std::move(fentries.at(index)));
+    fentries.erase(fentries.begin()+ index);
+    result->fparent = nullptr;
+    if (fdatabase)
+        result->clearDatabase();
+
+    return result;
+}
+
+void Database::Group::moveEntry(size_t index, Group* newParent, size_t newIndex){
+    assert(index < entries());
+    assert(newParent != nullptr);
+    assert(fdatabase == newParent->fdatabase);
+    assert(newIndex <= newParent->entries());
+    assert(this != newParent || (newIndex != index && newIndex != index+1));
+
+    Entry::Ptr entry(std::move(fentries.at(index)));
+    fentries.erase(fentries.begin()+index);
+
+    if (newParent == this && newIndex > index)
+        newIndex--;
+
+    entry->fparent = newParent;
+    newParent->fentries.insert(newParent->fentries.begin()+newIndex, std::move(entry));
+}
+
 void Database::Group::clearDatabase() noexcept{
-    if (!fdatabase)
-        return;
+    assert(fdatabase != nullptr);
 
-    for (const Entry::Ptr& entry: fentries){
-        entry->clearDatabase(fdatabase);
-    }
+    for (const Entry::Ptr& entry: fentries)
+        entry->clearDatabase();
 
-    for (const Group::Ptr& group: fgroups){
+    for (const Group::Ptr& group: fgroups)
         group->clearDatabase();
-    }
+
     if (fdatabase->recycleBin() == this)
         fdatabase->setRecycleBin(nullptr);
     if (fdatabase->templates() == this)
@@ -143,28 +276,24 @@ void Database::Group::clearDatabase() noexcept{
     fdatabase = nullptr;
 }
 
-
-void Database::Group::setDatabase(Database* database){
+template <typename ...Args>
+void Database::Group::setDatabase(Database* database, Args... args){
     assert(fdatabase == nullptr);
     fdatabase = database;
+
+    auto del = database->fdeletedObjects.find(fuuid);
+    if (del != database->fdeletedObjects.end()){
+        database->fdeletedObjects.erase(del);
+    }
+
+    fproperties->icon = insertIcon(fproperties->icon, database, args...);
+
     for (const Entry::Ptr& entry: fentries){
-        entry->setDatabase(database);
+        entry->setDatabase(database, args...);
     }
 
     for (const Group::Ptr& group: fgroups){
-        group->setDatabase(database);
-    }
-}
-
-void Database::Group::setDatabase(Database* database, BasicDatabaseModel* model){
-    assert(fdatabase == nullptr);
-    fdatabase = database;
-    for (const Entry::Ptr& entry: fentries){
-        entry->setDatabase(database, model);
-    }
-
-    for (const Group::Ptr& group: fgroups){
-        group->setDatabase(database, model);
+        group->setDatabase(database, args...);
     }
 }
 
@@ -193,110 +322,21 @@ Database::Entry* Database::Group::entryLookup(const Uuid& uuid) const noexcept{
     return nullptr;
 }
 
-void Database::Group::addGroup(Group::Ptr group, size_t index, BasicDatabaseModel* model){
+void Database::Group::addGroup(Group::Ptr group, size_t index, DatabaseModel* model){
+    assert(index <= groups());
     assert(group->fparent == nullptr);
     group->fparent = this;
     group->setDatabase(fdatabase, model);
     fgroups.insert(fgroups.begin()+index, std::move(group));
 }
 
-void Database::Group::addEntry(Entry::Ptr entry, size_t index, BasicDatabaseModel* model){
+void Database::Group::addEntry(Entry::Ptr entry, size_t index, DatabaseModel* model){
+    assert(index <= entries());
     assert(entry->fparent == nullptr);
     entry->fparent = this;
+    fentries.insert(fentries.begin()+index, std::move(entry));
     entry->setDatabase(fdatabase, model);
-    fentries.insert(fentries.begin()+index, std::move(entry));
 }
-
-
-Database::Group::Group(const Group& group)
-    :fparent(nullptr),
-      fdatabase(nullptr),
-      fuuid(Uuid::generate()),
-      fproperties(new Properties(*group.fproperties))
-{
-    fentries.reserve(group.fentries.size());
-    for (const Entry::Ptr& entry: group.fentries){
-        Entry* e = new Entry(*entry);
-        e->fparent = this;
-        fentries.emplace_back(e);
-    }
-
-    fgroups.reserve(group.fgroups.size());
-    for (const Group::Ptr& gr: group.fgroups){
-        Group* g = new Group(*gr);
-        g->fparent = this;
-        g->fdatabase = nullptr;
-        fgroups.emplace_back(g);
-    }
-}
-
-bool Database::Group::ancestor(const Group* group) const noexcept{
-    const Group* g = this;
-    while (g){
-        if (g == group)
-            return true;
-        g = g->parent();
-    }
-    return false;
-}
-
-size_t Database::Group::index(const Group* g) const noexcept{
-    for (size_t i=0; i<groups(); ++i){
-        if (group(i) == g)
-            return i;
-    }
-    assert("Subgroup not present." == nullptr);
-    return 0;
-}
-
-size_t Database::Group::index(const Entry* e) const noexcept{
-    for (size_t i=0; i<entries(); ++i){
-        if (entry(i) == e)
-            return i;
-    }
-    assert("Entry not present." == nullptr);
-    return 0;
-}
-
-void Database::Group::addGroup(Group::Ptr group, size_t index){
-    assert(group->fparent == nullptr);
-    group->fparent = this;
-    if (fdatabase)
-        group->setDatabase(fdatabase);
-    fgroups.insert(fgroups.begin()+index, std::move(group));
-}
-
-Database::Group* Database::Group::addGroup(size_t index){
-    Group* result = new Group(this);
-    addGroup(Group::Ptr(result), index);
-    return result;
-}
-
-Database::Group::Ptr Database::Group::takeGroup(size_t index) noexcept{
-    Group::Ptr result(std::move(fgroups.at(index)));
-    fgroups.erase(fgroups.begin()+index);
-    result->fparent = nullptr;
-    result->clearDatabase();
-    return result;
-}
-
-void Database::Group::addEntry(Entry::Ptr entry, size_t index){
-    entry->fparent = this;
-    if (fdatabase)
-        entry->setDatabase(fdatabase);
-    fentries.insert(fentries.begin()+index, std::move(entry));
-}
-
-Database::Entry::Ptr Database::Group::takeEntry(size_t index) noexcept{
-    Entry::Ptr result(std::move(fentries.at(index)));
-    result->fparent = nullptr;
-    fentries.erase(fentries.begin()+ index);
-    if (fdatabase)
-        result->clearDatabase(fdatabase);
-
-    return result;
-}
-
 
 //-------------------------------------------------------------------------------------
 
@@ -315,18 +355,18 @@ Database::Database()
     ftemplatesChanged = currentTime;
 }
 
-void Database::setRecycleBin(Group* bin, std::time_t changed) noexcept{
+void Database::setRecycleBin(const Group* bin, std::time_t changed) noexcept{
     assert(!bin || bin->database() == this);
     if (frecycleBin != bin){
-        frecycleBin = bin;
+        frecycleBin = const_cast<Group*>(bin);
         frecycleBinChanged = changed;
     }
 }
 
-void Database::setTemplates(Group* templ, std::time_t changed) noexcept{
+void Database::setTemplates(const Group* templ, std::time_t changed) noexcept{
     assert(!templ || templ->database() == this);
     if (ftemplates != templ){
-        ftemplates = templ;
+        ftemplates = const_cast<Group*>(templ);
         ftemplatesChanged = changed;
     }
 }
@@ -359,7 +399,6 @@ Icon Database::addCustomIcon(CustomIcon::Ptr icon){
 }
 
 //-------------------------------------------------------------------------------------
-
 
 }
 

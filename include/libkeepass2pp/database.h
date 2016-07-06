@@ -3,8 +3,7 @@
    This file is part of libkeepass2pp library.
 
 libkeepass2pp is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
+it under the terms of the GNU General Public License as published bythe Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
 
 libkeepass2pp is distributed in the hope that it will be useful,
@@ -115,9 +114,9 @@ public:
 
 class CompositeKey;
 
-class BasicDatabaseModel;
-template <typename ModelType>
 class DatabaseModel;
+template <typename ModelType>
+class DatabaseModelCTRP;
 
 /**
  * @brief The Database class represents KeePass 2 database.
@@ -310,21 +309,6 @@ public:
         /** @brief Unique, owning pointer to a Settings object.*/
         typedef std::unique_ptr<Settings> Ptr;
 
-//        /** @brief Constructs uninitilized settings objects.
-//         *
-//         * Field of constructed object are default-initialized.
-//         * This means that entries of the structure are not set to any specific
-//         * values (except databaseName, databaseDescription, defaultUsername and
-//         * color, which are empty strings).
-//         *
-//         * This constructor is useful if fields are to be assigned after construction
-//         * anyway.
-//         */
-//        Settings(DoNotInitEnum val)
-//            :lastSelectedGroup(val),
-//              lastTopVisibleGroup(val)
-//        {}
-
         //ToDo: rethink default values here.
         /** @brief Initializes settings to default values.
          * @param settings File settings object used to copy-initalize fileSettings
@@ -426,33 +410,6 @@ public:
      * A version can be owned by at most one entry at a time.
      */
     class Version{
-    private:
-        /** @brief Version constructor used only internally when deserializing
-         * a database.
-         * @param parent Parent entry of constructed version object.
-         *        This pointer cannot be nullptr.
-         */
-        inline Version(Entry* parent) noexcept
-            :fparent(parent)
-        {}
-
-        void setDatabase(Database* model);
-
-
-        /** @brief Adds a version into a database.
-         * @param model Database model object that owns database that takes
-         *        ownership of this version object.
-         *        This pointer cannot be nullptr.
-         *
-         * Internal function called when inserting version, entry or group into
-         * a database.
-         * It ensures that database model object gets notified of any metadata updates
-         * this operation my cause.
-         */
-        void setDatabase(BasicDatabaseModel* model);
-
-        Entry* fparent;
-
     public:
         /**
          * @brief Ptr is an unique owning pointer to a Version object.
@@ -472,9 +429,9 @@ public:
          * times that are set to Times::nowTimes().
          */
         inline Version() noexcept
-            :fparent(0),
-              icon(StandardIcon::Key),
-              times(Times::nowTimes())
+            :icon(StandardIcon::Key),
+              times(Times::nowTimes()),
+              fparent(nullptr)
         {}
 
         /**
@@ -487,8 +444,7 @@ public:
          *       or a database.
          */
         inline Version(const Version& v)
-            :fparent(0),
-              icon(v.icon),
+            :icon(v.icon),
               fgColor(v.fgColor),
               bgColor(v.bgColor),
               overrideUrl(v.overrideUrl),
@@ -496,7 +452,9 @@ public:
               times(v.times),
               strings(v.strings),
               binaries(v.binaries),
-              autoType(v.autoType)
+              autoType(v.autoType),
+              fparent(nullptr)
+
         {}
 
         /**
@@ -630,10 +588,35 @@ public:
         static const char* const urlString; /// Name of URL field in strings array
         static const char* const notesString; /// Name of notes field in strings array
 
+    private:
+        /** @brief Version constructor used only internally when deserializing
+         * a database.
+         * @param parent Parent entry of constructed version object.
+         *        This pointer cannot be nullptr.
+         */
+        inline Version(Entry* parent) noexcept
+            :fparent(parent)
+        {}
+
+        /** @brief Adds a version into a database.
+         * @param model Database model object that owns database that takes
+         *        ownership of this version object or nullptr.
+         *
+         * Internal function called when inserting version, entry or group into
+         * a database.
+         * It ensures that database model object gets notified of any metadata
+         * updates this operation my cause.
+         */
+        template<typename ...Args>
+        void setDatabase(Database* database, Args ...args);
+
+        Entry* fparent;
+
         friend class Entry;
         friend class Database;
         friend class Internal::Parser<Version>;
-        friend class BasicDatabaseModel;
+        friend class DatabaseModel;
+
     };
 
     /**
@@ -668,7 +651,7 @@ public:
          */
         inline Entry(Version::Ptr current)
             :fuuid(Uuid::generate()),
-              fparent(0)
+              fparent(nullptr)
         {
             current->fparent = this;
             fversions.push_back(std::move(current));
@@ -686,7 +669,7 @@ public:
          */
         inline Entry(Uuid uuid, Version::Ptr current)
             :fuuid(std::move(uuid)),
-              fparent(0)
+              fparent(nullptr)
         {
             current->fparent = this;
             fversions.push_back(std::move(current));
@@ -846,12 +829,14 @@ public:
 
         /**
          * @brief Adds a version to an entry object.
-         * @param version An owning pointer to a version object. This parameter cannot be \p nullptr.
-         * @param index Represents a position at which new version is inserted into
-         *        entries internal version list. Valid indexes are in [0, versions()].
+         * @param version An owning pointer to a version object. This parameter
+         *        cannot be \p nullptr.
+         * @param index Represents a position at which new version is inserted
+         *        into entries internal version list. Valid indexes are in
+         *        [0, versions()].
          *
-         * Entry takes ownership of the provided version object and inserts it into
-         * internal list of version at position \p index.
+         * Entry takes ownership of the provided version object and inserts it
+         * into internal list of version at position \p index.
          */
         void addVersion(Version::Ptr version, size_t index);
 
@@ -860,23 +845,19 @@ public:
          * @param index index of a version object to be taken.
          *
          * It returns an ownership of removed version object to the caller.
+         * Removing last version object from an entry produces unknown behavior.
          */
-        inline Version::Ptr takeVersion(size_t index) noexcept{
-            assert(fversions.size() > 1);
-            Version::Ptr result = std::move(fversions.at(index));
-            fversions.erase(fversions.begin() + index);
-            result->fparent = 0;
-            return result;
-        }
+        Version::Ptr takeVersion(size_t index) noexcept;
 
         /**
          * @brief Removes a version from an entry.
-         * @param version Version object to be taken. It must be owned by an entry
-         *        is taken from.
+         * @param version Version object to be taken. It must be owned by an
+         *        entry is taken from.
          *
          * It returns an ownership of removed version object to the caller.
-         * If \p version is not owned by an entry on which this method was called,
-         * result is undefined behavior.
+         * If \p version is not owned by an entry on which this method was
+         * called, result is undefined behavior. Removing last version object
+         * from an entry produces unknown behavior.
          */
         inline Version::Ptr takeVersion(const Version* version) noexcept{
             assert(fversions.size() > 1);
@@ -887,6 +868,8 @@ public:
          * @brief Removes a version at postion \p index from an entry.
          * @param index index of a version object to be removed
          *
+         * It deletes removed verion object.
+         * Removing last version object from an entry produces unknown behavior.
          */
         inline void removeVersion(size_t index) noexcept{
             assert(fversions.size() > 1);
@@ -895,12 +878,13 @@ public:
 
         /**
          * @brief Removes a version from an entry.
-         * @param version Version object to be removed. It must be owned by an entry
-         *        is taken from.
+         * @param version Version object to be removed. It must be owned by an
+         *        entry is taken from.
          *
          * It deletes removed verion object.
-         * If \p version is not owned by an entry on which this method was called,
-         * result is undefined behavior.
+         * Removing last version object from an entry produces unknown behavior.
+         * If \p version is not owned by an entry on which this method was
+         * called, result is undefined behavior.
          */
         inline void removeVersion(const Version* version) noexcept{
             assert(fversions.size() > 1);
@@ -945,11 +929,9 @@ public:
 
         /**
          * @brief Internal-use constructor.
-         * @param parent parent group for an entry.
+         * @param parent parent group for an entry;
+         * @param uuid An UUID for constructed entry;
          * @param current The version to be added to constructed entry.
-         *
-         * It leaves the UUID unintialized. It needs to be filled by external
-         * code before passing created object to the library user.
          */
         inline Entry(Group* parent, Uuid uuid, Version::Ptr current)
             :fuuid(uuid),
@@ -960,36 +942,24 @@ public:
         }
 
         /** @brief Adds a version into a database.
-         * @param model Database model object that owns database that takes
-         *        ownership of this version object. This pointer cannot be nullptr.
          * @param version An owning pointer to a version object. This parameter cannot be \p nullptr.
          * @param index Represents a position at which new version is inserted into
          *        entries internal version list. Valid indexes are in [0, versions()].
+         * @param model Database model object that owns database that takes
+         *        ownership of this version object. This pointer cannot be nullptr.
          *
          * Internal function called when inserting a version into entry owned
          * by a database using a database model.
          * It ensures that custom icon of a version is inserted into the database.
          */
-        void addVersion(Version::Ptr version, size_t index, BasicDatabaseModel* model);
+        void addVersion(Version::Ptr version, size_t index, DatabaseModel* model);
 
         /** @brief Internal function called when removing an entry from database.
-         * @param database Database that loses ownership of this entry object.
-         *        This pointer cannot be nullptr.
          *
          * Internal function called when removing an entry from database.
          * It ensures that database metadata gets updated.
          */
-        void clearDatabase(Database* database);
-
-        /** @brief Internal function called when inserting an entry into database.
-         * @param database Database that takes ownership of this entry object.
-         *        This pointer cannot be nullptr.
-         *
-         * Internal function called when inserting an entry into database.
-         * It ensures that database metadata gets updated.
-         */
-        void setDatabase(Database* database);
-
+        void clearDatabase();
 
         /** @brief Internal function called when inserting an entry into database.
          * @param model Database model that takes ownership of this entry object.
@@ -999,7 +969,8 @@ public:
          * It ensures that database model object gets notified of any metadata updates
          * this operation my cause.
          */
-        void setDatabase(Database* database, BasicDatabaseModel* model);
+        template <typename ...Args>
+        void setDatabase(Database* database, Args... args);
 
         Uuid fuuid;
         Group* fparent;
@@ -1008,7 +979,7 @@ public:
         friend class Internal::Parser<Entry>;
         friend class Group;
         friend class Database;
-        friend class BasicDatabaseModel;
+        friend class DatabaseModel;
     };
 
     /**
@@ -1076,114 +1047,6 @@ public:
                    enableSearching(true)
             {}
         };
-
-    private:
-
-        /** @brief Internal method called when group is taken out of database.
-         *
-         * It resets internal pointer to the database from removed group and
-         * all its subgroups.
-         */
-        void clearDatabase() noexcept;
-
-        /** @brief Internal methd called when gorup is added to the database.
-         *
-         * It sets internal pointer to the database in added group and all its
-         * subrgoups. It adds all custom icons contained in versions owned
-         * by added group to the database, and removed all added UUID from deleted
-         * object list (if present).
-         */
-        void setDatabase(Database* database);
-
-        /** @brief Internal function called when inserting a group into database.
-         * @param model Database model that takes ownership of this group object.
-         *        This pointer cannot be nullptr.
-         *
-         * Internal function called when inserting a group into database.
-         * It ensures that database model object gets notified of any metadata updates
-         * this operation may cause.
-         */
-        void setDatabase(Database* database, BasicDatabaseModel* model);
-
-        /** @brief Internal constructor. Constructs an empty group.
-         *
-         * Constructed group has \p parent group as parent, but is not added to the
-         * \p parent's internal list. It has internal pointer to the database set to
-         * the same as \p parent's.
-         * It has non-initialized UUID and default-initialized properties.
-         */
-        inline Group(Group* parent) noexcept
-            :fparent(parent),
-              fdatabase(parent->fdatabase),
-              fuuid(DoNotInit),
-              fproperties(new Properties())
-        {}
-
-        /** @brief Internal constructor. Constructs an empty group.
-         *
-         * Constructed group has parent group set no nullptr. It has internal pointer
-         * to the database set to \p database.
-         * It has non-initialized UUID and default-initialized properties.
-         */
-        inline Group(Database* database) noexcept
-            :fparent(nullptr),
-              fdatabase(database),
-              fuuid(DoNotInit),
-              fproperties(new Properties())
-        {}
-
-        /** @brief Internal method that looks up a group in groups owned by this
-         *         group.
-         * @param uuid UUID of a group to be returned.
-         * @return Pointer to a group with \uuid UUID or nullptr if no such group
-         * found.
-         *
-         * Group for which this method called can also be returned.
-         */
-        Group* groupLookup(const Uuid& uuid) const noexcept;
-
-        /** @brief Internal method that looks up an entry in entries owned by
-         *         this group.
-         * @param uuid UUID of an entry to be returned.
-         * @return Pointer to an entry with \uuid UUID or nullptr if no such entry
-         * found.
-         *
-         * This method searches through entries owned by this group and all its
-         * subgroups.
-         */
-        Entry* entryLookup(const Uuid& uuid) const noexcept;
-
-        /** @brief Adds a group into a database.
-         * @param model Database model object that owns this group object. This pointer
-         *        cannot be nullptr.
-         * @param group An owning pointer to a group object. This parameter cannot be \p nullptr.
-         * @param index Represents a position at which new group is inserted into
-         *        group's internal sub-groups list. Valid indexes are in [0, groups()].
-         *
-         * Internal function called when inserting a sub-group into group owned
-         * by a database model.
-         * It ensures that database model object gets notified of any metadata updates
-         * this operation my cause.
-         */
-        void addGroup(Group::Ptr group, size_t index, BasicDatabaseModel* model);
-
-
-        /** @brief Adds an entry into a database.
-         * @param model Database model object that owns this group object. This pointer
-         *        cannot be nullptr.
-         * @param entry An owning pointer to an entry object. This parameter cannot be \p nullptr.
-         * @param index Represents a position at which new entry is inserted into
-         *        group's internal sub-entries list. Valid indexes are in [0, entries()].
-         *
-         * Internal function called when inserting an entry into group owned
-         * by a database model.
-         * It ensures that database model object gets notified of any metadata updates
-         * this operation my cause.
-         */
-        void addEntry(Entry::Ptr entry, size_t index, BasicDatabaseModel* model);
-
-
-    public:
 
         /** @brief Constructs an empty group.
          *
@@ -1282,19 +1145,13 @@ public:
          * @brief Checks wheter a group is an ancestor to this group.
          * @param group Group that might be an ancestor to this group.
          *
-         * Group is ancestor to another group object if it is the same group,
-         * it owns that group or it owns another ancestor of that group.
+         * Group is ancestor to another group object if it owns that group or it
+         * owns another ancestor of that group.
          *
-         * @return \p true if \p group is an ancestor to this group; \p false otherwise.
+         * @return \p true if \p group is an ancestor to this group; \p false
+         * otherwise.
          */
         bool ancestor(const Group* group) const noexcept;
-
-        /**
-         * @brief The number of subgroups in this group.
-         */
-        inline size_t groups() const noexcept{
-            return fgroups.size();
-        }
 
         /**
          * @brief Returns index of a group in current group.
@@ -1336,6 +1193,13 @@ public:
          */
         inline Ptr take() noexcept{
             return parent()->takeGroup(this);
+        }
+
+        /**
+         * @brief The number of subgroups in this group.
+         */
+        inline size_t groups() const noexcept{
+            return fgroups.size();
         }
 
         /**
@@ -1394,13 +1258,6 @@ public:
          *        Valid values are [0, groups()].
          */
         void addGroup(Group::Ptr group, size_t index);
-
-        /** @brief Consructs a new Group and adds it as a subgroup to current gorup.
-         * @param index Position at which new subgroup should be inserted into internal subgroup list.
-         *        Valid values are [0, groups()].
-         * @return Non-owning pointer to newly created group.
-         */
-        Group* addGroup(size_t index);
 
         /** @brief Removes a subgroup and returns ownership of it to the caller.
          * @param index Position of a group (in internal subgroup list) that is to be
@@ -1467,7 +1324,24 @@ public:
             takeGroup(index(group));
         }
 
-        /** @brief Number of subgroup in this group.
+        /** @brief Moves a group to new parent group.
+         * @param index Index of subgroup of current group to be moved. Valid
+         *        values lie in [0, groups());
+         * @param newParent pointer to Group object that should now own moved
+         *        group. This pointer cannot be ancestor of current group, and
+         *        it cannot be nullptr.
+         * @param newIndex index of subgroup of newParent, before which current
+         *        group is added to its new parent. Valid values lie in
+         *        [0, newParent->groups()];
+         *
+         * Current group (source parent) and newParent (destination parent) may
+         * be the same group. In such case, valid range for newIndex is between
+         * [0, index) and (index+1, newParent->groups()]; ie. no-op moves
+         * produce unknown behavior.
+         */
+        void moveGroup(size_t index, Group* newParent, size_t newIndex);
+
+        /** @brief Number of entries in this group.
          */
         inline size_t entries() const noexcept{
             return fentries.size();
@@ -1525,7 +1399,6 @@ public:
             return entryLookup(uuid);
         }
 
-
         /** @brief Adds a new entry to current group.
          * @param group Owning pointer to an entry object. This pointer cannot be nullptr.
          * @param index Position at which new entry should be inserted into internal entry list.
@@ -1570,7 +1443,122 @@ public:
             return removeEntry(index(entry));
         }
 
+
+        /** @brief Moves an entry to new parent group.
+         * @param index Index of an entry in current group to be moved. Valid
+         *        values lie in [0, entries());
+         * @param newParent pointer to Group object that should now own moved
+         *        entry. This pointer cannot be  nullptr;
+         * @param newIndex index of an entry in newParent, before which moved
+         *        entry is added to its new parent. Valid values lie in
+         *        [0, newParent->entries()];
+         *
+         * Current group (source parent) and newParent (destination parent) may
+         * be the same group. In such case, valid range for newIndex is between
+         * [0, index) and (index+1, newParent->entries()]; ie. no-op moves
+         * produce unknown behavior.
+         */
+        void moveEntry(size_t index, Group* newParent, size_t newIndex);
+
     private:
+
+        /** @brief Internal method called when group is taken out of database.
+         *
+         * It resets internal pointer to the database from removed group and
+         * all its subgroups.
+         */
+        void clearDatabase() noexcept;
+
+        /** @brief Internal function called when inserting a group into database.
+         * @param model Database model that takes ownership of this group object.
+         *        This pointer cannot be nullptr.
+         *
+         * Internal function called when inserting a group into database.
+         * It ensures that database model object gets notified of any metadata updates
+         * this operation may cause.
+         */
+        template <typename ...Args>
+        void setDatabase(Database* database, Args... args);
+
+        /** @brief Internal constructor. Constructs an empty group.
+         *
+         * Constructed group has \p parent group as parent, but is not added to the
+         * \p parent's internal list. It has internal pointer to the database set to
+         * the same as \p parent's.
+         * It has non-initialized UUID and default-initialized properties.
+         */
+        inline Group(Group* parent) noexcept
+            :fparent(parent),
+              fdatabase(parent->fdatabase),
+              fuuid(DoNotInit),
+              fproperties(new Properties())
+        {}
+
+        /** @brief Internal constructor. Constructs an empty group.
+         *
+         * Constructed group has parent group set no nullptr. It has internal pointer
+         * to the database set to \p database.
+         * It has non-initialized UUID and default-initialized properties.
+         */
+        inline Group(Database* database) noexcept
+            :fparent(nullptr),
+              fdatabase(database),
+              fuuid(DoNotInit),
+              fproperties(new Properties())
+        {}
+
+        /** @brief Internal method that looks up a group in groups owned by this
+         *         group.
+         * @param uuid UUID of a group to be returned.
+         * @return Pointer to a group with \uuid UUID or nullptr if no such group
+         * found.
+         *
+         * Group for which this method called can also be returned.
+         */
+        Group* groupLookup(const Uuid& uuid) const noexcept;
+
+        /** @brief Internal method that looks up an entry in entries owned by
+         *         this group.
+         * @param uuid UUID of an entry to be returned.
+         * @return Pointer to an entry with \uuid UUID or nullptr if no such entry
+         * found.
+         *
+         * This method searches through entries owned by this group and all its
+         * subgroups.
+         */
+        Entry* entryLookup(const Uuid& uuid) const noexcept;
+
+        /** @brief Adds a group into a database.
+         * @param group An owning pointer to a group object. This parameter
+         *        cannot be \p nullptr.
+         * @param index Represents a position at which new group is inserted
+         *        into group's internal sub-groups list. Valid indexes are in
+         *        [0, groups()].
+         * @param model Database model object that owns this group object or
+         *        nullptr.
+         *
+         * Internal function called when inserting a sub-group into group owned
+         * by a database model.
+         * It ensures that database model object gets notified of any metadata
+         * updates this operation my cause.
+         */
+        void addGroup(Group::Ptr group, size_t index, DatabaseModel* model);
+
+        /** @brief Adds an entry into a database.
+         * @param model Database model object that owns this group object. This pointer
+         *        cannot be nullptr.
+         * @param entry An owning pointer to an entry object. This parameter cannot be \p nullptr.
+         * @param index Represents a position at which new entry is inserted into
+         *        group's internal sub-entries list. Valid indexes are in [0, entries()].
+         *
+         * Internal function called when inserting an entry into group owned
+         * by a database model.
+         * It ensures that database model object gets notified of any metadata updates
+         * this operation my cause.
+         */
+        void addEntry(Entry::Ptr entry, size_t index, DatabaseModel* model);
+
+
         Group* fparent;
         Database* fdatabase;
 
@@ -1582,7 +1570,7 @@ public:
 
         friend class Internal::Parser<Group>;
         friend class Database;
-        friend class BasicDatabaseModel;
+        friend class DatabaseModel;
     };
 
     /** @brief Constructs an empty database.
@@ -1657,7 +1645,7 @@ public:
      * If \p bin is a valid pointer, it must point to a group that is owned by
      * this database.
      */
-    void setRecycleBin(Group* bin, std::time_t changed = time(nullptr)) noexcept;
+    void setRecycleBin(const Group* bin, std::time_t changed = time(nullptr)) noexcept;
 
     /** @brief Time when recycle bin group was last set (as reported by time()).
      */
@@ -1694,7 +1682,7 @@ public:
      * this database.
      *
      */
-    void setTemplates(Group* templ, std::time_t changed = time(nullptr)) noexcept;
+    void setTemplates(const Group* templ, std::time_t changed = time(nullptr)) noexcept;
 
     /** @brief Time when templates group was last set (as reported by time()).
      */

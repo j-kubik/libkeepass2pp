@@ -279,6 +279,41 @@ public:
         swap(d1.ctx, d2.ctx);
     }
 
+    /** @brief Coputes a disgest of a datab buffer in one call.
+     * @param type Digest type (as specified by OpenSSL);
+     * @param t Buffer to store digest output;
+     * @param args Arguments specyfying digest input (as in update() method);
+     *
+     * The result is well defined if both \p t and  \p args specify the same, or
+     * overlapping buffers.
+     */
+    template <typename T, typename ...Args>
+    static std::enable_if_t<!std::is_same<std::decay_t<T>, ENGINE*>::value &&
+                            !std::is_null_pointer<std::decay<T>>::value>
+    oneShot(const EVP_MD* type, T&& t, Args&& ...args){
+        Digest d(type);
+        d.update(std::forward<Args>(args)...);
+        d.final(std::forward<T>(t));
+    }
+
+    /** @brief Coputes a disgest of a datab buffer in one call.
+     * @param type Digest type (as specified by OpenSSL);
+     * @param t Buffer to store digest output;
+     * @param args Arguments specyfying digest input (as in update() method);
+     * @param impl Digest implementation (as specified by OpenSSL);
+     *
+     * The result is well defined if both \p t and  \p args specify the same, or
+     * overlapping buffers.
+     */
+    template <typename T, typename ...Args>
+    static std::enable_if_t<!std::is_same<std::decay_t<T>, ENGINE*>::value &&
+                            !std::is_null_pointer<std::decay<T>>::value>
+    oneShot(const EVP_MD* type, ENGINE* engine, T&& t, Args&& ...args){
+        Digest d(type, engine);
+        d.update(std::forward<Args>(args)...);
+        d.final(std::forward<T>(t));
+    }
+
 };
 
 /** @brief Wrapper class aroud EVP_CIPHER_CTX OpenSSL cipher context. */
@@ -461,6 +496,13 @@ inline Container rand(Args&& ...args){
 
 //------------------------------------------------------------------------------
 
+/** @brief Namespace XML contains wrappers for some libXml structures that make
+ *         an attempt at providing easier resource management in C++ programs.
+ *
+ * Those wrappers are thin, and do not isolate user form underlying library.
+ * Knowledg of libXml is necesary as the set of functionality these wrappers
+ * provide is not exhaustive and only documented up to the diferences to libXml.
+ */
 namespace XML{
 
 #ifdef KEEPASS2PP_VERBOSE_XML_ERRORS
@@ -763,7 +805,14 @@ public:
         virtual void close()=0;
     };
 
-
+    /** @brief Creates new xmlTextReader.
+     * @param input Input object to get the data from;
+     * @param encoding Encoding of input data (as sepcified by libXml)
+     *
+     * InputBufferTextReader does not take ownership of input object it uses.
+     * Caller should ensure that input object remains valid for as long as
+     * InputBufferTextReader exists.
+     */
     InputBufferTextReader(Input* input, xmlCharEncoding encoding);
 
     InputBufferTextReader(const InputBufferTextReader&) = delete;
@@ -771,34 +820,61 @@ public:
     InputBufferTextReader& operator=(const InputBufferTextReader&) = delete;
     InputBufferTextReader& operator=(InputBufferTextReader&&) = delete;
 
-    void expectLocalNameElement(const char* localName);
+
+    //void expectLocalNameElement(const char* localName);
     void expectRead();
     void expectNext();
 
     String readString();
     String attribute(const char* name);
 
+    /** @brief read next XML node in.
+     * @return true if node was read, false if there is no more nodes.
+     *
+     * This is a wrapper to xmlTextReaderRead function. If an error is
+     * encountered, it throws an exception.
+     */
     bool read();
+
+    /** @brief read next XML node in. Skips subtree of current node if any.
+     * @return true if node was read, false if there is no more nodes.
+     *
+     * This is a wrapper to xmlTextReaderNext function. If an error is
+     * encountered, it throws an exception.
+     */
     bool next();
 
+    /** @brief Current line number. */
     inline int lineNumber() const noexcept{ return xmlTextReaderGetParserLineNumber(ftextReader.get()); }
+    /** @brief Current column number. */
     inline int columnNumber() const noexcept{ return xmlTextReaderGetParserColumnNumber(ftextReader.get()); }
 
+    /** @brief Checks if current node is an empty element. */
     inline bool isEmpty() const noexcept { return xmlTextReaderIsEmptyElement(ftextReader.get()); }
+    /** @brief Checks current depth. */
     inline int depth() const noexcept{ return xmlTextReaderDepth(ftextReader.get()); }
+
+    /** @brief Returns local name of current XML node.*/
     std::string localName() const;
+
+    /** @brief Returns local name of current XML node.*/
     String xlocalName() const;
 
+    /** @brief Returns current node type (as sepcified by libXml). */
     inline xmlReaderTypes nodeType() const{
         return xmlReaderTypes(xmlTextReaderNodeType(ftextReader.get()));
     }
 
 
 private:
+    /** @brief Create a new parser input buffer. */
     ParserInputBuffer createBuffer(xmlCharEncoding encoding);
 
+    /** @brief libXml callback. */
     static int xmlInputClose(void* context) noexcept;
+    /** @brief libXml callback. */
     static int xmlInputRead	(void* context, char* buffer, int len);
+    /** @brief libXml callback. */
     static void	xmlStructuredErrorFunc(void * userData, xmlErrorPtr error);
 
     Input* finput;
@@ -810,77 +886,132 @@ protected:
     std::exception_ptr exception;
 };
 
+/** @brief xmlTextReader wrapper class. */
 class OutputBufferTextWriter{
 public:
+
+    /** Interface class that is used as an bastract interface to
+     * xmlOutputBuffer.*/
     class Output{
     public:
+        /** @brief Called when data is to be writen to an output buffer. */
         virtual int write(const char* buffer, int len) =0;
+        /** @brief Called when writing to a bufer is concluded. */
         virtual void close()=0;
     };
 
-    void setIndent(int indent);
-
-    void writeStartDocument(const char * version = "1.0",
-                            const char * encoding = "utf-8",
-                            const char * standalone = "yes");
-    void writeEndDocument();
-    void writeStartElement(const char* name);
-    void writeEndElement();
-    void writeAttribute(const char* name, const char* value);
-    void writeString(const char* content);
-    void writeBase64(const uint8_t* content, int len);
-
-    inline void writeString(const std::string& s){
-        writeString(s.c_str());
-    }
-
-    template <typename Allocator>
-    inline void writeBase64(const std::vector<uint8_t, Allocator>& content){
-        writeBase64(content.data(), content.size());
-    }
-
-    template <std::size_t size>
-    inline void writeBase64(const std::array<uint8_t, size>& content){
-        writeBase64(content.data(), content.size());
-    }
-
+    /** @brief Constructs a Text writer that uses passed output.
+     *
+     * OutputBufferTextWriter does not take ownership of output object it uses.
+     * Caller should ensure that output object remains valid for as long as
+     * OutputBufferTextWriter exists.
+     */
     OutputBufferTextWriter(Output* output);
-
-    ~OutputBufferTextWriter(){
-
-    }
-
 
     OutputBufferTextWriter(const OutputBufferTextWriter&) = delete;
     OutputBufferTextWriter(OutputBufferTextWriter&&) = delete;
     OutputBufferTextWriter& operator=(const OutputBufferTextWriter&) = delete;
     OutputBufferTextWriter& operator=(OutputBufferTextWriter&&) = delete;
 
-    class ElementGuard{
-    private:
-        OutputBufferTextWriter& writer;
+    /** @brief Changes XML formatting indent.
+     *
+     * This is a wrapper to xmlTextWriterSetIndent function. If an error is
+     * encountered, it throws an exception.
+     */
+    void setIndent(int indent);
 
-    public:
-        inline ElementGuard(OutputBufferTextWriter& writer, const char* name)
-            :writer(writer)
-        {
-            writer.writeStartElement(name);
-        }
+    /** @brief Writes a start document entity.
+     *
+     * This is a wrapper to xmlTextWriterStartDocument function. If an error is
+     * encountered, it throws an exception.
+     */
+    void writeStartDocument(const char * version = "1.0",
+                            const char * encoding = "utf-8",
+                            const char * standalone = "yes");
 
-        inline ~ElementGuard(){
-            if (!writer.exception)
-                writer.writeEndElement();
-        }
-    };
+    /** @brief Writes a end document entity.
+     *
+     * This is a wrapper to xmlTextWriterEndDocument function. If an error is
+     * encountered, it throws an exception.
+     */
+    void writeEndDocument();
 
+    /** @brief Writes an element start entity.
+     *
+     * This is a wrapper to xmlTextWriterStartElement function. If an error is
+     * encountered, it throws an exception.
+     */
+    void writeStartElement(const char* name);
 
+    /** @brief Writes an element end entity.
+     *
+     * This is a wrapper to xmlTextWriterEndElement function. If an error is
+     * encountered, it throws an exception.
+     */
+    void writeEndElement();
+
+    /** @brief Writes an element attribute.
+     *
+     * This is a wrapper to xmlTextWriterWriteAttribute function. If an error is
+     * encountered, it throws an exception.
+     */
+    void writeAttribute(const char* name, const char* value);
+
+    /** @brief Writes a text entity.
+     *
+     * This is a wrapper to xmlTextWriterWriteString function. If an error is
+     * encountered, it throws an exception.
+     */
+    void writeString(const char* content);
+
+    /** @brief Writes a bianry buffer as base64 encoded text entity.
+     *
+     * This is a wrapper to xmlTextWriterWriteString function. If an error is
+     * encountered, it throws an exception.
+     */
+    void writeBase64(const uint8_t* content, int len);
+
+    /** @brief Writes a text entity.
+     *
+     * This is a wrapper to xmlTextWriterWriteString function. If an error is
+     * encountered, it throws an exception.
+     */
+    inline void writeString(const std::string& s){
+        writeString(s.c_str());
+    }
+
+    /** @brief Writes a bianry buffer as base64 encoded text entity.
+     *
+     * This is a wrapper to xmlTextWriterWriteString function. If an error is
+     * encountered, it throws an exception.
+     */
+    template <typename Allocator>
+    inline void writeBase64(const std::vector<uint8_t, Allocator>& content){
+        writeBase64(content.data(), content.size());
+    }
+
+    /** @brief Writes a bianry buffer as base64 encoded text entity.
+     *
+     * This is a wrapper to xmlTextWriterWriteString function. If an error is
+     * encountered, it throws an exception.
+     */
+    template <std::size_t size>
+    inline void writeBase64(const std::array<uint8_t, size>& content){
+        writeBase64(content.data(), content.size());
+    }
 
 private:
 
+    /** @brief Checks return status and throws an exception if it indicates
+     *         an error.*/
     void checkException(int result);
 
+
+    /** @brief libXml callback. */
     static int xmlOutputClose(void* context) noexcept;
+    /** @brief libXml callback. */
     static int xmlOutputWrite(void * context, const char * buffer, int len);
+    /** @brief libXml callback. */
     static void	xmlStructuredErrorFunc(void * userData, xmlErrorPtr error);
 
     Output* foutput;
@@ -888,20 +1019,28 @@ private:
 
 protected:
     std::exception_ptr exception;
-
-    friend class ElementGuard;
 };
 
+/** @brief Basic xml input buffer, that uses an istream object as data source.*/
 class IstreamInput: public InputBufferTextReader::Input{
 private:
     std::istream& stream;
 public:
 
+    /** @brief Constructs IstreamInput.
+     * @param stream Input stream to use as data source.
+     *
+     * IstreamInput doesn't take ownership of stream object. It is up to the
+     * caller to ensure that stream reamins valid as long as IstreamInput
+     * exists.
+     */
     inline IstreamInput(std::istream& stream) noexcept
         :stream(stream)
     {}
 
+    /** @brief Overload of InputBufferTextReader::Input method. */
     virtual int read(char* buffer, int len);
+    /** @brief Overload of InputBufferTextReader::Input method. */
     virtual void close();
 };
 
@@ -909,141 +1048,196 @@ public:
 
 //---------------------------------------------------------------------------------------
 
+/** @brief Namespace Zlib contains wrappers for some libZ structures that make
+ *         an attempt at providing easier resource management in C++ programs.
+ *
+ * Those wrappers are thin, and do not isolate user form underlying library.
+ * Knowledge of libZ is necesary as the set of functionality these wrappers
+ * provide is not exhaustive and only documented up to the diferences to libZ.
+ */
 namespace Zlib{
+
+enum class AllocType{
+    Default, Safe
+};
 
 class Deflater;
 
+/** @brief Inflater class is a libZ stream decompression class.
+ *
+ * It is a wrapper around libZ z_stream structure.
+ */
 class Inflater{
 private:
     z_stream stream;
 
-    voidpf allocFunc(voidpf opaque, uInt items, uInt size){
-        unused(opaque);
-        try{
-            std::size_t* result = reinterpret_cast<std::size_t*>(SafeMemoryManager::allocate(items*size + sizeof(std::size_t)));
-            *result = size;
-            return result+1;
-        }catch(std::bad_alloc&){
-            return 0;
-        }
-    }
+    /** @brief libZ-style safe memeory allocation function.*/
+    static voidpf allocFunc(voidpf opaque, uInt items, uInt size) noexcept;
 
-    void freeFunc(voidpf opaque, voidpf address){
-        unused(opaque);
-        std::size_t* ptr = reinterpret_cast<std::size_t*>(address);
-        SafeMemoryManager::deallocate(ptr, *ptr);
-    }
+    /** @brief libZ-style safe memeory allocation function.*/
+    static void freeFunc(voidpf opaque, voidpf address) noexcept;
 
 public:
 
-    inline Inflater(int windowBits = MAX_WBITS){
-        memset(&stream, 0, sizeof(z_stream));
-
-        int ret = inflateInit2(&stream, windowBits);
-        if (ret != Z_OK)
-            throwError("Error initializing decompression", ret, stream.msg);
-    }
+    /** @brief Construct an Inflater.
+     * @param windowBits base two logarithm of the maximum window size;
+     *        It must be bigger or equal to the windowBits paramater used for
+     *        compression of data that is to be decompressed.
+     * @param type Inflater uses safe memory allocation functions if set to
+     *        AllocType::Default.
+     */
+    Inflater(int windowBits = MAX_WBITS,
+             AllocType type = AllocType::Default);
 
     Inflater(const Inflater&) = delete;
     Inflater(Inflater&&) = delete;
     Inflater& operator=(const Inflater&) = delete;
     Inflater& operator=(Inflater&&) = delete;
 
-    ~Inflater(){
+    /** @brief Destroys an Inflater. */
+    inline ~Inflater() noexcept{
         inflateEnd(&stream);
     }
 
+    /** @brief Accessor for underlying z_stream structure. */
     inline operator z_stream*() noexcept{
         return &stream;
     }
 
+    /** @brief Accessor for underlying z_stream structure. */
     inline z_stream* operator->() noexcept{
         return &stream;
     }
 
-    static void throwError(const char* context, int retval, const char* msg){
-        std::ostringstream s;
-        s << context << " (" << retval << ")";
-        if (msg) s << ": " << msg;
-        s << ".";
-        throw std::runtime_error(s.str());
-    }
+    /** @brief One shot decompression function.
+     * @param input Data to be decompressed;
+     * @param windowBits base two logarithm of the maximum window size.
+     *        It must be bigger or equal to the windowBits paramater used for
+     *        compression of data that is to be decompressed.
+     * @param type Inflater uses safe memory allocation functions if set to
+     *        AllocType::Default.
+     *
+     * Decompresses entire buffer and returns it in one operation.
+     */
+    static std::vector<uint8_t> oneShot(const std::vector<uint8_t>& input,
+                                        int windowBits = MAX_WBITS,
+                                        AllocType type = AllocType::Default);
 
-    static std::vector<uint8_t> oneShot(const std::vector<uint8_t>& input, int windowBits = MAX_WBITS | 16);
-    static SafeVector<uint8_t> oneShot(const SafeVector<uint8_t>& input, int windowBits = MAX_WBITS | 16);
+    /** @brief One shot decompression function.
+     * @param input Data to be decompressed;
+     * @param windowBits base two logarithm of the maximum window size.
+     *        It must be bigger or equal to the windowBits paramater used for
+     *        compression of data that is to be decompressed.
+     * @param type Inflater uses safe memory allocation functions if set to
+     *        AllocType::Default.
+     *
+     * Decompresses entire buffer and returns it in one operation.
+     */
+    static SafeVector<uint8_t> oneShot(const SafeVector<uint8_t>& input,
+                                       int windowBits = MAX_WBITS,
+                                       AllocType type = AllocType::Default);
+
+    /** @brief Utility function that composes an excpetion message and throws
+     *         std::runtime_error.
+     * @param context String describing context in which error code was
+     *        received;
+     * @param retVal libZ error code;
+     * @param msg libZ error message.
+     */
+    static void throwError(const char* context, int retval, const char* msg);
 
     friend class Deflater;
-
 };
 
+/** @brief Inflater class is a libZ stream compression class.
+ *
+ * It is a wrapper around libZ z_stream structure.
+ */
 class Deflater{
 private:
     z_stream stream;
 
-    voidpf allocFunc(voidpf opaque, uInt items, uInt size){
-        unused(opaque);
-        try{
-            std::size_t* result = reinterpret_cast<std::size_t*>(SafeMemoryManager::allocate(items*size + sizeof(std::size_t)));
-            *result = size;
-            return result+1;
-        }catch(std::bad_alloc&){
-            return 0;
-        }
-    }
-
-    void freeFunc(voidpf opaque, voidpf address){
-        unused(opaque);
-        std::size_t* ptr = reinterpret_cast<std::size_t*>(address);
-        SafeMemoryManager::deallocate(ptr, *ptr);
-    }
-
-
 public:
 
-    inline Deflater(int level = Z_DEFAULT_COMPRESSION,
-                    int windowBits = MAX_WBITS,
-                    int memLevel=8,
-                    int strategy = Z_DEFAULT_STRATEGY){
-        memset(&stream, 0, sizeof(z_stream));
+    /** @brief Construct a Deflater.
+     * @param level Compression level (as specified by libZ)
+     * @param windowBits base two logarithm of the maximum window size (as
+     *        specified by libZ). Data compressed by this Deflater must be
+     *        decompressed with windowBits greater or equal to the value set
+     *        here.
+     * @param memLevel Algorithm memory usage (as specified by libZ). Must be
+     *        between 1 (least memory) and 9 (most memory);
+     * @param strategy used to tune the compression algorithm (as specified by
+     *        libZ);
+     * @param type Inflater uses safe memory allocation functions if set to
+     *        AllocType::Default.
+     */
+    Deflater(int level = Z_DEFAULT_COMPRESSION,
+             int windowBits = MAX_WBITS,
+             int memLevel=8,
+             int strategy = Z_DEFAULT_STRATEGY,
+             AllocType type = AllocType::Default);
 
-        int ret = deflateInit2(&stream, level, Z_DEFLATED, windowBits, memLevel, strategy);
-        if (ret != Z_OK)
-            Inflater::throwError("Error initializing compression", ret, stream.msg);
-    }
-
-    inline Deflater(alloc_func zalloc,
-                    free_func  zfree,
-                    voidpf     opaque,
-                    int level = Z_DEFAULT_COMPRESSION,
-                    int windowBits = MAX_WBITS,
-                    int memLevel=8,
-                    int strategy = Z_DEFAULT_STRATEGY){
-        memset(&stream, 0, sizeof(z_stream));
-
-        stream.zalloc = zalloc;
-        stream.zfree = zfree;
-        stream.opaque = opaque;
-        int ret = deflateInit2(&stream, level, Z_DEFLATED, windowBits, memLevel, strategy);
-        if (ret != Z_OK)
-            Inflater::throwError("Error initializing compression", ret, stream.msg);
-    }
-
-
-
-    ~Deflater(){
+    /** @brief Destroys a Deflater. */
+    inline ~Deflater() noexcept{
         deflateEnd(&stream);
     }
 
+    /** @brief Accessor for underlying z_stream structure. */
     inline operator z_stream*() noexcept{
         return &stream;
     }
 
+    /** @brief Accessor for underlying z_stream structure. */
     inline z_stream* operator->() noexcept{
         return &stream;
     }
 
-    static std::vector<uint8_t> oneShot(const std::vector<uint8_t>& input, int windowBits = MAX_WBITS);
-    static SafeVector<uint8_t> oneShot(const SafeVector<uint8_t>& input, int windowBits = MAX_WBITS);
+    /** @brief One shot decompression function.
+     * @param input Data to be compressed;
+     * @param level Compression level (as specified by libZ)
+     * @param windowBits base two logarithm of the maximum window size (as
+     *        specified by libZ). Data compressed by this Deflater must be
+     *        decompressed with windowBits greater or equal to the value set
+     *        here.
+     * @param memLevel Algorithm memory usage (as specified by libZ). Must be
+     *        between 1 (least memory) and 9 (most memory);
+     * @param strategy used to tune the compression algorithm (as specified by
+     *        libZ);
+     * @param type Inflater uses safe memory allocation functions if set to
+     *        AllocType::Default.
+     *
+     * Compresses entire buffer and returns it in one operation.
+     */
+    static std::vector<uint8_t> oneShot(const std::vector<uint8_t>& input,
+                                        int level = Z_DEFAULT_COMPRESSION,
+                                        int windowBits = MAX_WBITS,
+                                        int memLevel=8,
+                                        int strategy = Z_DEFAULT_STRATEGY,
+                                        AllocType type = AllocType::Default);
+
+    /** @brief One shot decompression function.
+     * @param input Data to be compressed;
+     * @param level Compression level (as specified by libZ)
+     * @param windowBits base two logarithm of the maximum window size (as
+     *        specified by libZ). Data compressed by this Deflater must be
+     *        decompressed with windowBits greater or equal to the value set
+     *        here.
+     * @param memLevel Algorithm memory usage (as specified by libZ). Must be
+     *        between 1 (least memory) and 9 (most memory);
+     * @param strategy used to tune the compression algorithm (as specified by
+     *        libZ);
+     * @param type Inflater uses safe memory allocation functions if set to
+     *        AllocType::Default.
+     *
+     * Compresses entire buffer and returns it in one operation.
+     */
+    static SafeVector<uint8_t> oneShot(const SafeVector<uint8_t>& input,
+                                       int level = Z_DEFAULT_COMPRESSION,
+                                       int windowBits = MAX_WBITS,
+                                       int memLevel=8,
+                                       int strategy = Z_DEFAULT_STRATEGY,
+                                       AllocType type = AllocType::Default);
 };
 
 }

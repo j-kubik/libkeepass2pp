@@ -74,7 +74,8 @@ void OStreamLink::runThread(){
         ffile->flush();
         finished.set_value(std::move(ffile));
     }catch(...){
-        finished.set_exception(std::current_exception());
+        ffile->flush();
+        finished.set_value(std::move(ffile));
         throw;
     }
 }
@@ -271,7 +272,7 @@ void UnhashStreamLink::runThread(){
 
         auto match = std::mismatch(encryptedInitBytes.begin(), encryptedInitBytes.end(), initBytes.begin());
         if (match != std::make_pair(encryptedInitBytes.end(), initBytes.end())){
-            throw std::runtime_error("Incorrect composed key.");
+            throw BadHeader();
         }
 
     }

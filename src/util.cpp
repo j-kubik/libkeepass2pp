@@ -50,7 +50,7 @@ std::string implode(const std::vector<std::string>& items, char separator){
 }
 
 void outHex(std::ostream& o, uint8_t c){
-	static const char symbols[] = {'0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F'};
+    static const char symbols[] = {'0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f'};
 	o << symbols[c >> 4] << symbols[c & 0x0f];
 }
 
@@ -58,6 +58,44 @@ void outHex(std::ostream& o, const uint8_t* begin, const uint8_t* end){
     for (; begin!= end; ++begin){
         outHex(o, *begin);
 	}
+}
+
+
+uint8_t inHex(char c){
+    if (c >= '0' && c <='9')
+        return c - '0';
+    if (c >='a' && c <= 'f')
+        return c - 'a' + 10;
+    if (c >='A' && c <= 'F')
+        return c - 'A' + 10;
+    throw std::runtime_error("Bad hexadecimal number");
+}
+
+uint8_t inHex(char c1, char c2){
+    return (inHex(c1) << 4) | inHex(c2);
+}
+
+std::vector<uint8_t> inHex(const char* begin, const char* end){
+    assert(begin <= end);
+    if ((end-begin)%2)
+        throw std::runtime_error("Bad hexadecimal number");
+    std::vector<uint8_t> result;
+    result.reserve((end-begin)/2);
+    while (begin!=end){
+        result.push_back(inHex(*begin, *(begin+1)));
+        begin += 2;
+    }
+    return result;
+}
+
+uint8_t inHex(std::istream& s){
+    int c1 = s.get();
+    if (c1 == std::char_traits<char>::eof())
+        throw std::runtime_error("Hex buffer of wrong length.");
+    int c2 = s.get();
+    if (c2 == std::char_traits<char>::eof())
+        throw std::runtime_error("Hex buffer of wrong length.");
+    return inHex(c1, c2);
 }
 
 static uint8_t decodeBase64Char(char c){
@@ -110,7 +148,7 @@ std::vector<uint8_t> decodeBase64(std::string data){
 
 	switch (data.size() % 4){
 	case 0: break;
-	case 1: throw std::runtime_error("Invalid base 64 string.");
+    case 1: throw std::runtime_error("Invalid base64 string.");
 	case 2:
 		c1 = decodeBase64Char(data[length*4]);
 		c2 = decodeBase64Char(data[length*4+1]);
@@ -149,7 +187,7 @@ SafeVector<uint8_t> safeDecodeBase64(SafeString<char> data){
 
 	switch (data.size() % 4){
 	case 0: break;
-	case 1: throw std::runtime_error("Invalid base 64 string.");
+    case 1: throw std::runtime_error("Invalid base64 string.");
 	case 2:
 		c1 = decodeBase64Char(data[length*4]);
 		c2 = decodeBase64Char(data[length*4+1]);
@@ -168,11 +206,11 @@ SafeVector<uint8_t> safeDecodeBase64(SafeString<char> data){
 }
 
 std::string encodeBase64(const uint8_t* data, std::size_t size){
-    int blocks = size / 3;
+    int fullBlocks = size / 3;
     std::string result;
-    result.reserve((blocks + bool(size % 3))*4);
+    result.reserve(((size+2)/3)*4);
 
-    for (int i=0; i< blocks; ++i){
+    for (int i=0; i< fullBlocks; ++i){
         result.push_back(encodeBase64Byte(data[i*3] >> 2));
         result.push_back(encodeBase64Byte((data[i*3] << 4 | data[i*3+1] >> 4)& 0x3f));
         result.push_back(encodeBase64Byte((data[i*3+1] << 2 | data[i*3+2] >> 6) &0x3f));

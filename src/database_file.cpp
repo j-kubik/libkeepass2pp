@@ -2058,6 +2058,9 @@ void XmlReaderLink::runThread(){
             throw std::runtime_error("Bad stream format.");
 
         finishedPromise.set_value(parse<Database>(reader, fileSettings));
+    }catch(UnhashStreamLink::BadHeader&){
+        finishedPromise.set_exception(std::make_exception_ptr(std::runtime_error("Incorrect composed key.")));
+        throw;
     }catch(...){
         finishedPromise.set_exception(std::current_exception());
         throw;

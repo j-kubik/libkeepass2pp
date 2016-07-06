@@ -89,7 +89,8 @@ inline void trim(std::string &s) {
 void outHex(std::ostream& o, uint8_t c);
 void outHex(std::ostream& o, const uint8_t* begin, const uint8_t* end);
 
-inline void outHex(std::ostream& o, const std::vector<uint8_t>& cs){
+template <typename Alloc>
+inline void outHex(std::ostream& o, const std::vector<uint8_t, Alloc>& cs){
     outHex(o, cs.data(), cs.data() + cs.size());
 }
 
@@ -98,6 +99,17 @@ inline void outHex(std::ostream& o, const std::array<uint8_t, size>& cs, std::si
     outHex(o, cs.data(), cs.data()+s);
 }
 
+uint8_t inHex(char c);
+uint8_t inHex(char c1, char c2);
+std::vector<uint8_t> inHex(const char* begin, const char* end);
+uint8_t inHex(std::istream& s);
+
+template <std::size_t size>
+inline void inHex(std::istream& s, std::array<uint8_t, size>& as){
+    for (uint8_t& a: as){
+        a = inHex(s);
+    }
+}
 
 std::vector<uint8_t> decodeBase64(std::string data);
 SafeVector<uint8_t> safeDecodeBase64(SafeString<char> data);

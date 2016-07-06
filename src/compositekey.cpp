@@ -160,6 +160,20 @@ CompositeKey::Key::Ptr CompositeKey::Key::fromBuffer(SafeVector<uint8_t> data){
 
 //-----------------------------------------------------------------------------------------------
 
+// Kdbx Coposite key algorithm:
+// - If password was provided, compute sha256 of it.
+// - If key file was provided, it's key data (in binary form, not base64).
+// - Concatenate both hashes (if both provided), and compute sha256 of it.
+// - Initialize AES 256 ECB mode encryptor with provided transformSeed as key,
+// - and iv of 16 zero bytes.
+// - use hash result as first input to that encryptor.
+// - take output of above encryptor as next input for it (without
+//   re-initialization); repeat encryptionRounds times.
+// - Take last 32-byte output of the encryptor, and compute sha256 of it; Result
+//   of the last hash is the composite key.
+
+
+
 SafeVector<uint8_t> CompositeKey::getCompositeKey(const std::array<uint8_t, 32>& transformSeed, uint64_t encryptionRounds) const{
 
     SafeVector<uint8_t> hash(32);
@@ -213,13 +227,7 @@ SafeVector<uint8_t> CompositeKey::getCompositeKey(const std::array<uint8_t, 32>&
         assert(out == 0);
     }
 
-    d.init(EVP_sha256());
-    d.update(hash);
-    d.final(hash);
-
-    std::cout << "Composite key is: ";
-    outHex(std::cout, &*hash.begin(), &*hash.end());
-    std::cout << std::endl;
+    OSSL::Digest::oneShot(EVP_sha256(), hash, hash);
 
     return hash;
 }

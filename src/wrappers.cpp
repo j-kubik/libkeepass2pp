@@ -1267,6 +1267,27 @@ void InputBufferTextReader::xmlStructuredErrorFunc(void * userData, xmlErrorPtr 
 
 //-------------------------------------------------------------------------------------
 
+OutputBufferTextWriter::OutputBufferTextWriter(Output* output)
+    :foutput(output)
+
+{
+    OutputBuffer outputBuffer(xmlAllocOutputBuffer(nullptr));
+    if (!outputBuffer)
+        throw std::bad_alloc();
+
+    outputBuffer->writecallback = &OutputBufferTextWriter::xmlOutputWrite;
+    outputBuffer->closecallback = &OutputBufferTextWriter::xmlOutputClose;
+    outputBuffer->context = reinterpret_cast<void*>(this);
+
+    ftextWriter = TextWriter(xmlNewTextWriter(outputBuffer.get()));
+    if (!ftextWriter)
+        Exception::throwLastError();
+    if (exception)
+        std::rethrow_exception(exception);
+
+    outputBuffer.release();
+}
+
 void OutputBufferTextWriter::setIndent(int indent){
     checkException(xmlTextWriterSetIndent(ftextWriter.get(), indent));
 }
@@ -1299,27 +1320,6 @@ void OutputBufferTextWriter::writeString(const char* content){
 void OutputBufferTextWriter::writeBase64(const uint8_t* content, int len){
     if (len)
         writeString(encodeBase64(content, len));
-}
-
-OutputBufferTextWriter::OutputBufferTextWriter(Output* output)
-    :foutput(output)
-
-{
-    OutputBuffer outputBuffer(xmlAllocOutputBuffer(nullptr));
-    if (!outputBuffer)
-        throw std::bad_alloc();
-
-    outputBuffer->writecallback = &OutputBufferTextWriter::xmlOutputWrite;
-    outputBuffer->closecallback = &OutputBufferTextWriter::xmlOutputClose;
-    outputBuffer->context = reinterpret_cast<void*>(this);
-
-    ftextWriter = TextWriter(xmlNewTextWriter(outputBuffer.get()));
-    if (!ftextWriter)
-        Exception::throwLastError();
-    if (exception)
-        std::rethrow_exception(exception);
-
-    outputBuffer.release();
 }
 
 void OutputBufferTextWriter::checkException(int result){
@@ -1379,13 +1379,47 @@ void IstreamInput::close(){} // Does nothing, it's owner's responsibility to clo
 
 }
 
+//------------------------------------------------------------------------------
+
 namespace Zlib{
 
-std::vector<uint8_t> Inflater::oneShot(const std::vector<uint8_t>& input, int windowBits){
+voidpf Inflater::allocFunc(voidpf opaque, uInt items, uInt size) noexcept{
+    unused(opaque);
+    try{
+        std::size_t* result = reinterpret_cast<std::size_t*>(SafeMemoryManager::allocate(items*size + sizeof(std::size_t)));
+        *result = size;
+        return result+1;
+    }catch(std::bad_alloc&){
+        return 0;
+    }
+}
+
+void Inflater::freeFunc(voidpf opaque, voidpf address) noexcept{
+    unused(opaque);
+    std::size_t* ptr = reinterpret_cast<std::size_t*>(address);
+    SafeMemoryManager::deallocate(ptr, *ptr);
+}
+
+Inflater::Inflater(int windowBits,
+                   AllocType type){
+    memset(&stream, 0, sizeof(z_stream));
+    if (type == AllocType::Safe){
+        stream.zalloc = &allocFunc;
+        stream.zfree = &freeFunc;
+    }
+
+    int ret = inflateInit2(&stream, windowBits);
+    if (ret != Z_OK)
+        throwError("Error initializing decompression", ret, stream.msg);
+}
+
+std::vector<uint8_t> Inflater::oneShot(const std::vector<uint8_t>& input,
+                                       int windowBits,
+                                       AllocType type){
     std::vector<uint8_t> result;
     std::vector<uint8_t> output(0, input.size());
 
-    Inflater strm(windowBits);
+    Inflater strm(windowBits, type);
     strm->next_in = input.data();
     strm->avail_in = input.size();
     strm->next_out = output.data();
@@ -1428,11 +1462,13 @@ std::vector<uint8_t> Inflater::oneShot(const std::vector<uint8_t>& input, int wi
     return result;
 }
 
-SafeVector<uint8_t> Inflater::oneShot(const SafeVector<uint8_t>& input, int windowBits){
+SafeVector<uint8_t> Inflater::oneShot(const SafeVector<uint8_t>& input,
+                                      int windowBits,
+                                      AllocType type){
     SafeVector<uint8_t> result;
     SafeVector<uint8_t> output(input.size());
 
-    Inflater strm(windowBits);
+    Inflater strm(windowBits, type);
     strm->next_in = input.data();
     strm->avail_in = input.size();
     strm->next_out = output.data();
@@ -1475,11 +1511,42 @@ SafeVector<uint8_t> Inflater::oneShot(const SafeVector<uint8_t>& input, int wind
     return result;
 }
 
-std::vector<uint8_t> Deflater::oneShot(const std::vector<uint8_t>& input, int windowBits){
+void Inflater::throwError(const char* context, int retval, const char* msg){
+    std::ostringstream s;
+    s << context << " (" << retval << ")";
+    if (msg) s << ": " << msg;
+    s << ".";
+    throw std::runtime_error(s.str());
+}
+
+//------------------------------------------------------------------------------
+
+Deflater::Deflater(int level,
+                   int windowBits,
+                   int memLevel,
+                   int strategy,
+                   AllocType type){
+    memset(&stream, 0, sizeof(z_stream));
+    if (type == AllocType::Safe){
+        stream.zalloc = &Inflater::allocFunc;
+        stream.zfree = &Inflater::freeFunc;
+    }
+
+    int ret = deflateInit2(&stream, level, Z_DEFLATED, windowBits, memLevel, strategy);
+    if (ret != Z_OK)
+        Inflater::throwError("Error initializing compression", ret, stream.msg);
+}
+
+std::vector<uint8_t> Deflater::oneShot(const std::vector<uint8_t>& input,
+                                       int level,
+                                       int windowBits,
+                                       int memLevel,
+                                       int strategy,
+                                       AllocType type){
     std::vector<uint8_t> result;
     std::vector<uint8_t> output(0, input.size());
 
-    Deflater strm(windowBits);
+    Deflater strm(level, windowBits, memLevel, strategy, type);
     strm->next_in = input.data();
     strm->avail_in = input.size();
     strm->next_out = output.data();
@@ -1513,11 +1580,16 @@ std::vector<uint8_t> Deflater::oneShot(const std::vector<uint8_t>& input, int wi
     return result;
 }
 
-SafeVector<uint8_t> Deflater::oneShot(const SafeVector<uint8_t>& input, int windowBits){
+SafeVector<uint8_t> Deflater::oneShot(const SafeVector<uint8_t>& input,
+                                      int level,
+                                      int windowBits,
+                                      int memLevel,
+                                      int strategy,
+                                      AllocType type){
     SafeVector<uint8_t> result;
     SafeVector<uint8_t> output(0, input.size());
 
-    Deflater strm(windowBits);
+    Deflater strm(level, windowBits, memLevel, strategy, type);
     strm->next_in = input.data();
     strm->avail_in = input.size();
     strm->next_out = output.data();
