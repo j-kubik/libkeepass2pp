@@ -1,0 +1,27 @@
+<?xml version='1.0'?>
+<ui version="4.0">
+ <class>GroupEditor</class>
+ <widget name="GroupEditor" class="QTabWidget">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>400</width>
+    <height>300</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>TabWidget</string>
+  </property>
+  <widget name="tab" class="QWidget">
+   <attribute name="title">
+    <string>Tab 1</string>
+   </attribute>
+  </widget>
+  <widget name="tab" class="QWidget">
+   <attribute name="title">
+    <string>Tab 2</string>
+   </attribute>
+  </widget>
+ </widget>
+</ui>

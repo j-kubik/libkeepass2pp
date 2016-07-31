@@ -48,6 +48,8 @@ namespace Kdbx{
 class CompositeKey{
 public:
 
+    typedef std::shared_ptr<CompositeKey> Ptr;
+
     class Key{
     public:
         typedef std::unique_ptr<Key> Ptr;
@@ -86,6 +88,12 @@ public:
          */
         static Key::Ptr fromFile(SafeString<char> filename);
 
+        /** @brief Creates a new key file.
+         *
+         * This function can block.
+         */
+        static Key::Ptr createFile(SafeString<char> filename);
+
         /** @brief Creates application-provided buffer key.
          * @param data Key's binary representation.
          */
@@ -102,8 +110,13 @@ public:
 
     private:
         Type ftype;
-
     };
+
+    CompositeKey() =default;
+    CompositeKey(const CompositeKey&) = delete;
+    CompositeKey(CompositeKey&&) = default;
+    CompositeKey& operator=(const CompositeKey&) = delete;
+    CompositeKey& operator=(CompositeKey&&) = default;
 
     /** @brief Adds a singular key into composed key set.
      *
@@ -124,6 +137,7 @@ public:
      */
     SafeVector<uint8_t> getCompositeKey(const std::array<uint8_t, 32>& transformSeed,
                                         uint64_t encryptionRounds) const;
+
 
 private:
 

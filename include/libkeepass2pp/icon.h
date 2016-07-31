@@ -23,6 +23,9 @@ along with libkeepass2pp.  If not, see <http://www.gnu.org/licenses/>.
 
 namespace Kdbx {
 
+/** @brief Enumeration defining standard icons that KeePass 2 references by
+ *         predefined values/enumerators.
+ */
 enum class StandardIcon{
         Key = 0,
         World,
@@ -100,10 +103,21 @@ enum class StandardIcon{
         Count
 };
 
+/** @brief CustomIcon class represents a non-standard icon that can be embedded
+ *         in the database.
+ *
+ * Each custom icon is identified by an UUID, and contains a data buffer that
+ * describes icon's content. Currently, KeePass2 seems to use PNG format
+ * exclusively when saving database files, but it is unknown what format it is
+ * able to process.
+ */
 class CustomIcon{
 public:
+    /** @brief Shared pointer to a custom icon object.*/
     typedef std::shared_ptr<const CustomIcon> Ptr;
 
+    /** @brief Constructs a custom icon object with specified UUID and buffer
+     *         as it's contents.*/
     inline CustomIcon(Uuid uuid, std::vector<uint8_t> data) noexcept
         :fuuid(std::move(uuid)),
           fdata(std::move(data))
@@ -114,10 +128,12 @@ public:
     CustomIcon& operator=(const CustomIcon&) = default;
     CustomIcon& operator=(CustomIcon&&) = default;
 
+    /** @brief Returns CustomIcon's UUID. */
     inline const Uuid& uuid() const noexcept{
         return fuuid;
     }
 
+    /** @brief Returns a reference to CustomIcon's data buffer. */
     inline const std::vector<uint8_t>& data() const noexcept{
         return fdata;
     }
@@ -126,8 +142,6 @@ private:
     Uuid fuuid;
     std::vector<uint8_t> fdata;
 };
-
-typedef std::vector<CustomIcon::Ptr> CustomIcons;
 
 class Icon{
 public:
@@ -263,7 +277,8 @@ public:
 
         switch (ftype){
         case Type::Custom:
-            return fcustomIcon == icon.fcustomIcon;
+            return fcustomIcon == icon.fcustomIcon ||
+                   fcustomIcon->uuid() == icon.fcustomIcon->uuid();
         case Type::Standard:
             return fstandardIcon == icon.fstandardIcon;
         default:

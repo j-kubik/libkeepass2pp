@@ -33,8 +33,8 @@ along with libkeepass2pp.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "util.h"
 #include "icon.h"
-#include "pipeline.h"
 #include "cryptorandom.h"
+#include "compositekey.h"
 
 namespace Kdbx{
 
@@ -111,8 +111,6 @@ public:
         return result;
     }
 };
-
-class CompositeKey;
 
 class DatabaseModel;
 template <typename ModelType>
@@ -215,6 +213,8 @@ public:
                   compression(CompressionAlgorithm::GZip)
             {}
 
+            bool needsKey()const noexcept;
+
         };
 
     private:
@@ -270,7 +270,7 @@ public:
          * @note \p settings member of \p File class can be acceses even if \p File
          *       object is invalid.
          */
-        std::future<Database::Ptr> getDatabase(const CompositeKey& key);
+        std::future<Database::Ptr> getDatabase(CompositeKey compositeKey);
 
         /** @brief Initializes deserialization process.
          * @return std::future object that gets an owning pointer to database
@@ -330,7 +330,6 @@ public:
          */
         inline Settings(const Database::File::Settings& settings = Database::File::Settings())
             :fileSettings(settings),
-              masterKeyChanged(0),
               maintenanceHistoryDays(365),
               historyMaxItems(-1),
               masterKeyChangeRec(-1),
@@ -349,7 +348,6 @@ public:
 
         File::Settings fileSettings;
         std::string color; // just a raw string for now...
-        std::time_t masterKeyChanged;
         unsigned int maintenanceHistoryDays;
         int historyMaxItems;
         int64_t masterKeyChangeRec;
@@ -598,19 +596,28 @@ public:
             :fparent(parent)
         {}
 
-        /** @brief Adds a version into a database.
-         * @param database Database that takes ownership of this version object.
-         *        This pointer cannot be nullptr;
+        /** @brief Updates database metadata after a new version object was
+         *         added.
          * @param args Additional parameters. For now, it can only be empty, or
          *        a pointer to a DatabaseModel object that manges the database.
          *
          * Internal function called when inserting version, entry or group into
          * a database.
          * It ensures that database model object gets notified of any metadata
-         * updates this operation my cause.
+         * updates this operation may cause.
          */
         template<typename ...Args>
-        void setDatabase(Database* database, Args ...args);
+        void setDatabase(Args ...args);
+
+        /** @brief Updates database metadata after a new version object was
+         *         removed.
+         *
+         * Internal function called when removing version from a database.
+         * It ensures that database model object gets notified of any metadata
+         * updates this operation may cause.
+         */
+        void clearDatabase();
+
 
         Entry* fparent;
 
@@ -874,8 +881,7 @@ public:
          * Removing last version object from an entry produces unknown behavior.
          */
         inline void removeVersion(size_t index) noexcept{
-            assert(fversions.size() > 1);
-            fversions.erase(fversions.begin() + index);
+            takeVersion(index);
         }
 
         /**
@@ -889,8 +895,7 @@ public:
          * called, result is undefined behavior.
          */
         inline void removeVersion(const Version* version) noexcept{
-            assert(fversions.size() > 1);
-            removeVersion(index(version));
+            takeVersion(index(version));
         }
 
         /**
@@ -957,26 +962,24 @@ public:
          */
         void addVersion(Version::Ptr version, size_t index, DatabaseModel* model);
 
+        /** @brief Internal function called when inserting an entry into a
+         *         database.
+         * @param args Additional parameters. For now, it can only be empty, or
+         *        a pointer to a DatabaseModel object that manges the database.
+         *
+         * Internal function called when inserting an entry into database.
+         * It ensures that database model object gets notified of any metadata updates
+         * this operation may cause.
+         */
+        template <typename ...Args>
+        void setDatabase(Args... args);
+
         /** @brief Internal function called when removing an entry from database.
          *
          * Internal function called when removing an entry from database.
          * It ensures that database metadata gets updated.
          */
         void clearDatabase();
-
-        /** @brief Internal function called when inserting an entry into a
-         *         database.
-         * @param database Database that takes ownership of this version object.
-         *        This pointer cannot be nullptr;
-         * @param args Additional parameters. For now, it can only be empty, or
-         *        a pointer to a DatabaseModel object that manges the database.
-         *
-         * Internal function called when inserting an entry into database.
-         * It ensures that database model object gets notified of any metadata updates
-         * this operation my cause.
-         */
-        template <typename ...Args>
-        void setDatabase(Database* database, Args... args);
 
         Uuid fuuid;
         Group* fparent;
@@ -1052,6 +1055,8 @@ public:
                    enableAutoType(true),
                    enableSearching(true)
             {}
+
+            Properties(const Properties&) = default;
         };
 
         /** @brief Constructs an empty group.
@@ -1101,11 +1106,7 @@ public:
          * @param properties New properties of a group. This pointer cannot be nullptr.
          * @return Pointer to old properties object. This pointer is never nullptr.
          */
-        inline Properties::Ptr setProperties(Properties::Ptr properties){
-            using std::swap;
-            swap(fproperties, properties);
-            return properties;
-        }
+        Properties::Ptr setProperties(Properties::Ptr properties);
 
         /**
          * @brief Parent group for a group.
@@ -1151,8 +1152,8 @@ public:
          * @brief Checks wheter a group is an ancestor to this group.
          * @param group Group that might be an ancestor to this group.
          *
-         * Group is ancestor to another group object if it owns that group or it
-         * owns another ancestor of that group.
+         * Group is ancestor to another group object if it is the same group, it
+         * owns that group or it owns another ancestor of that group.
          *
          * @return \p true if \p group is an ancestor to this group; \p false
          * otherwise.
@@ -1437,7 +1438,7 @@ public:
          *        removed and deleted.
          */
         inline void removeEntry(size_t index) noexcept{
-            fentries.erase(fentries.begin()+ index);
+            takeEntry(index);
         }
 
         /** @brief Removes an entry and destroys it.
@@ -1446,7 +1447,7 @@ public:
          * If \p entry is not directly owned by current group, result is undefined behavior.
          */
         inline void removeEntry(Entry* entry) noexcept{
-            return removeEntry(index(entry));
+            takeEntry(index(entry));
         }
 
 
@@ -1468,16 +1469,7 @@ public:
 
     private:
 
-        /** @brief Internal method called when group is taken out of database.
-         *
-         * It resets internal pointer to the database from removed group and
-         * all its subgroups.
-         */
-        void clearDatabase() noexcept;
-
         /** @brief Internal function called when inserting a group into database.
-         * @param database Database that takes ownership of this version object.
-         *        This pointer cannot be nullptr;
          * @param args Additional parameters. For now, it can only be empty, or
          *        a pointer to a DatabaseModel object that manges the database.
          *
@@ -1486,7 +1478,17 @@ public:
          * this operation may cause.
          */
         template <typename ...Args>
-        void setDatabase(Database* database, Args... args);
+        void setDatabase(Args... args);
+
+        /** @brief Internal method called when group is taken out of database.
+         * @param args Additional parameters. For now, it can only be empty, or
+         *        a pointer to a DatabaseModel object that manges the database.
+         *
+         * It resets internal pointer to the database from removed group and
+         * all its subgroups.
+         */
+        template <typename ...Args>
+        void clearDatabase(Args... args) noexcept;
 
         /** @brief Internal constructor. Constructs an empty group.
          *
@@ -1548,9 +1550,22 @@ public:
          * Internal function called when inserting a sub-group into group owned
          * by a database model.
          * It ensures that database model object gets notified of any metadata
-         * updates this operation my cause.
+         * updates this operation may cause.
          */
         void addGroup(Group::Ptr group, size_t index, DatabaseModel* model);
+
+        /** @brief Removes a group from a database.
+         * @param index Index of a group to be removed. Valid indexes are in
+         *        [0, groups()].
+         * @param model Database model object that owns this group object. This
+         *        pointer cannot be nullptr.
+         *
+         * Internal function called when removing a sub-group from group owned
+         * by a database model.
+         * It ensures that database model object gets notified of any metadata
+         * updates this operation may cause.
+         */
+        Group::Ptr takeGroup(size_t index, DatabaseModel* model);
 
         /** @brief Adds an entry into a database.
          * @param entry An owning pointer to an entry object. This parameter cannot be \p nullptr.
@@ -1566,6 +1581,13 @@ public:
          */
         void addEntry(Entry::Ptr entry, size_t index, DatabaseModel* model);
 
+        /**
+         * @brief Replaces properties of a group with a copy of provided object.
+         * @param properties New properties of a group. This pointer cannot be nullptr.
+         * @brief Model that manages the database this group belongs to.
+         * @return Pointer to old properties object. This pointer is never nullptr.
+         */
+        Properties::Ptr setProperties(Properties::Ptr properties, DatabaseModel* model);
 
         Group* fparent;
         Database* fdatabase;
@@ -1582,6 +1604,7 @@ public:
     };
 
     /** @brief Constructs an empty database.
+     * @param key A CompositeKey used to save the database;
      *
      * Empty database owns only a root group, which owns no further groups or
      * entries. Created database has no recycle bin group set, no templates group
@@ -1592,7 +1615,7 @@ public:
      * recycleBinChanged() and templatesChanged() are set to current time (as
      * reported by time() function.).
      */
-    Database();
+    Database(CompositeKey key = CompositeKey());
 
     Database(const Database&) = delete;
     Database(Database&& database) = delete;
@@ -1616,6 +1639,52 @@ public:
     const Group* root() const noexcept{
         return froot.get();
     }
+
+    /** @brief Returns non-owning pointer to the group with specified UUID.
+     * @param uuid UUID of a group object to retrieve.
+     * @return Group with specified UUID or nullptr if no such group exists.
+     *
+     * This method searches through entire database tree.
+     */
+    inline Group* group(const Uuid& uuid) noexcept{
+        if (froot->fuuid == uuid)
+            return froot.get();
+        return froot->groupLookup(uuid);
+    }
+
+    /** @brief Returns non-owning pointer to the group with specified UUID.
+     * @param uuid UUID of a group object to retrieve.
+     * @return Group with specified UUID or nullptr if no such group exists.
+     *
+     * This method searches through entire database tree.
+     */
+    inline const Group* group(const Uuid& uuid) const noexcept{
+        if (froot->fuuid == uuid)
+            return froot.get();
+        return froot->groupLookup(uuid);
+    }
+
+    /** @brief Returns non-owning pointer to the entry with specified UUID.
+     * @param uuid UUID of an entry object to retrieve.
+     * @return Entry with specified UUID or nullptr if no such entry exists.
+     *
+     * This method searches through entire database tree.
+     */
+    inline Entry* entry(const Uuid& uuid) noexcept{
+        return froot->entryLookup(uuid);
+    }
+
+    /** @brief Returns non-owning pointer to the entry with specified UUID.
+     * @param uuid UUID of an entry object to retrieve.
+     * @return Entry with specified UUID or nullptr if no such entry exists.
+     *
+     * This method searches through entire database tree.
+     */
+    inline const Entry* entry(const Uuid& uuid) const noexcept{
+        return froot->entryLookup(uuid);
+    }
+
+    // -------------- database settings related ------------------
 
     /** @brief Returns recycle bin group or nullptr if no recycle bin was set.
      *
@@ -1698,50 +1767,6 @@ public:
         return ftemplatesChanged;
     }
 
-    /** @brief Returns non-owning pointer to the group with specified UUID.
-     * @param uuid UUID of a group object to retrieve.
-     * @return Group with specified UUID or nullptr if no such group exists.
-     *
-     * This method searches through entire database tree.
-     */
-    inline Group* group(const Uuid& uuid) noexcept{
-        if (froot->fuuid == uuid)
-            return froot.get();
-        return froot->groupLookup(uuid);
-    }
-
-    /** @brief Returns non-owning pointer to the group with specified UUID.
-     * @param uuid UUID of a group object to retrieve.
-     * @return Group with specified UUID or nullptr if no such group exists.
-     *
-     * This method searches through entire database tree.
-     */
-    inline const Group* group(const Uuid& uuid) const noexcept{
-        if (froot->fuuid == uuid)
-            return froot.get();
-        return froot->groupLookup(uuid);
-    }
-
-    /** @brief Returns non-owning pointer to the entry with specified UUID.
-     * @param uuid UUID of an entry object to retrieve.
-     * @return Entry with specified UUID or nullptr if no such entry exists.
-     *
-     * This method searches through entire database tree.
-     */
-    inline Entry* entry(const Uuid& uuid) noexcept{
-        return froot->entryLookup(uuid);
-    }
-
-    /** @brief Returns non-owning pointer to the entry with specified UUID.
-     * @param uuid UUID of an entry object to retrieve.
-     * @return Entry with specified UUID or nullptr if no such entry exists.
-     *
-     * This method searches through entire database tree.
-     */
-    inline const Entry* entry(const Uuid& uuid) const noexcept{
-        return froot->entryLookup(uuid);
-    }
-
     /** @brief current Settings object.
      */
     inline const Settings& settings() const noexcept{
@@ -1763,37 +1788,59 @@ public:
         return settings;
     }
 
+    /** @brief Returns composite key associated with a database. */
+    inline const CompositeKey& compositeKey() const noexcept{
+        return fcompositeKey;
+    }
+
+    /** @brief Time when composite key was last set (as reported by time()).
+     */
+    const std::time_t& compositeKeyChanged() const noexcept{
+        return fcompositeKeyChanged;
+    }
+
+    /** @brief Sets a composite key associated with a database.
+     * @param key New composite key for a database;
+     * @param changed Time when composite key was changed. In order to avoid
+     *        inconsistencies it is recomended that default value (time()) is
+     *        used.
+     */
+    CompositeKey setCompositeKey(CompositeKey key, std::time_t changed = time(nullptr)) noexcept;
+
+    //------ Custom icons functions ------
+
     /** @brief Returns count of custom icons stored in this database.
      */
-    inline size_t customIcons() const noexcept{
+    inline size_t icons() const noexcept{
         return fcustomIcons.size();
     }
 
-    /** @brief Returns a reference to a CustomIcon objech at position \p index.
+    /** @brief Returns a reference to a CustomIcon object at position \p index.
      * @param index Index of custom icon to be retrieved. Valid values are in
-     *        [0, customIcons()).
+     *        [0, icons()).
      */
-    inline const CustomIcon::Ptr& customIcon(size_t index) const noexcept{
-        return fcustomIcons.at(index);
+    inline CustomIcon::Ptr icon(size_t index) const noexcept{
+        return fcustomIcons[index].first;
     }
 
-    /** @brief Returns an index of custom icon with specified UUID.
-     *
-     * It returns -1 if no such icon is present in database.
+    /** @brief Returns a reference to a CustomIcon object with specified UUID.
+     * @param uuid UUID of custom icon to be retrieved.
+     * @return Shared pointer to a CustomIcon object with specified UUID, or
+     *         nullptr if no such object.
      */
-    int customIconIndex(const Uuid& uuid) const noexcept;
+    CustomIcon::Ptr icon(const Uuid& uuid) const noexcept;
 
-    /** @brief Returns an Icon with specific UUID or a StandardIcon.
-     * @param customIcon UUID of a custom icon to retrieve.
-     * @param sicon standard icon to return if \p customIcon UUID does not appear
-     *        in the database.
-     *
-     * This is an utility method. Since KDBX format can save both custom icon UUID and
-     * a standard icon index, this method is provided for cases where both are present.
-     * In such case custom icon takes precedence. If custom icon UUID equal Uuid::nil()
-     * or icon with given UUId is not present in the database, standard icon is returned.
+    /** @brief Returns an index of custom icon with specified UUID.
+     * @return Index of custom icon or -1 if no such icon is present in
+     *         database.
      */
-    Icon icon(Uuid customIcon, StandardIcon sicon) const noexcept;
+    int iconIndex(const Uuid& uuid) const noexcept;
+
+    /** @brief Returns an index of specified custom icon.
+     * @return Index of custom icon or -1 if no such icon is present in
+     *         database.
+     */
+    int iconIndex(const CustomIcon::Ptr& icon) const noexcept;
 
     /** @brief Adds a CustomIcon into the database.
      * @param icon Shared pointer to the custom icon to be added to the database.
@@ -1801,40 +1848,86 @@ public:
      * @return Icon object pointing to a CustomIcon \p icon's UUID.
      *
      * This method adds custom icon to the database only if ther is no custom icon
-     * with the same UUID already in the database. In other words,  custom icons
+     * with the same UUID already in the database. In other words, custom icons
      * are assumed to be equivalent if their UUIDs are the same. If a custom icon
      * with the same UUID was already added to the database, added \p icon is ignored,
-     * and a reference to the custom icon already in the database is returned.
+     * and a reference to the custom icon in the database is returned.
      */
-    Icon addCustomIcon(CustomIcon::Ptr icon);
+    Icon addIcon(CustomIcon::Ptr icon);
 
     /** @brief Adds custom icon into the database.
      * @param Icon to be added to the database.
      *
      * This is an utility method. If \p icon is a custom icon, it calls
-     * addCustomIcon(icon.custom()) and returns its result. Otherwise it returns passed
+     * addIcon(icon.custom()) and returns its result. Otherwise it returns passed
      * icon object unchanged.
      */
-    inline Icon addCustomIcon(const Icon& icon){
-        if (icon.type() == Icon::Type::Custom)
-            return addCustomIcon(icon.custom());
-        return icon;
-    }
+    Icon addIcon(const Icon& icon);
+
+    /** @brief Removes custom icon from database.
+     * @param index Index of custom icon to be removed. Valid values are in
+     *        [0, icons()).
+     * @return true if an icon was removed from the database, false otherwise;
+     *
+     * Icon is removed only if it not referenced by any database entity.
+     */
+    bool removeIcon(size_t index);
+
+    /** @brief Removes custom icon from database.
+     * @param icon Icon to be removed;
+     * @return true if an icon was removed from the database, false otherwise;
+     *
+     * Icon is removed only if it not referenced by any database entity.
+     */
+    bool removeIcon(const CustomIcon::Ptr& icon);
+
+    /** @brief Removes custom icon from database.
+     * @return true if an icon was removed from the database, false otherwise;
+     *
+     * Icon is removed only if it not referenced by any database entity.
+     */
+    bool removeIcon(const Icon& icon);
+
+    /** @brief Returns an Icon with specific UUID or a StandardIcon.
+     * @param customIcon UUID of a custom icon to retrieve.
+     * @param sicon standard icon to return if \p customIcon UUID does not appear
+     *        in the database.
+     *
+     * This is an utility method. Since KDBX format saves both custom icon UUID and
+     * a standard icon index, this method is provided for cases where both are present.
+     * In such case custom icon takes precedence. If custom icon UUID equal Uuid::nil()
+     * or icon with given UUId is not present in the database, standard icon is returned.
+     */
+    Icon icon(const Uuid& customIcon, StandardIcon sicon) const noexcept;
+
+    // ------------- File Interaction methods -----------------
 
     /** @brief Serializes a database into an ostream object.
-     * @param file An owning pointer to an ostream object that is used to
-     *        to store serialized data.
-     * @param key Composite key used to encrypt serialized data. This parameter is
-     *        only used if \p settings indicates that the data is to be encrypted.
-     * @return future object that gets back an owning pointer to \p ostream \p file
-     *         object when the serialization process is finished and the stream is
-     *         flushed.
+     * @param file An owning pointer to an ostream object that is used to store
+     *        serialized data.
+     * @param key Composite key used to encrypt serialized data. This parameter
+     *        is only used if \p settings indicates that the data is to be
+     *        encrypted.
+     * @return an owning pointer to \p ostream \p object.
      *
-     * If serialization was interrupted by an error, returned future
-     * object will throw an apropriate exception in \p get() method. In such case
-     * retrieving the \p ostream object is not possible.
+     * This method doesn't return until serialization if completed.
+     * If serialization was interrupted by an error, an apropriate exception is
+     * thrown. In such case retrieving the \p ostream object is not possible.
      */
-    std::future<std::unique_ptr<std::ostream>> saveToFile(std::unique_ptr<std::ostream> file, const CompositeKey& key) const;
+    std::unique_ptr<std::ostream> saveToFile(std::unique_ptr<std::ostream> file) const;
+
+    /** @brief Serializes a database into a file.
+     * @param filename Filenae to save the data under. Any data that already
+     *        exist in that file is erased.
+     * @param key Composite key used to encrypt serialized data. This parameter
+     *        is only used if \p settings indicates that the data is to be
+     *        encrypted.
+     *
+     * This method doesn't return until serialization if completed.
+     * If serialization was interrupted by an error, an apropriate exception is
+     * thrown.
+     */
+    void saveToFile(const std::string& filename) const;
 
 //    /** @brief Serializes a database into an ostream object *** USING PLAIN XML FORMAT***.
 //     * @param file An owning pointer to an ostream object that is used to
@@ -1851,13 +1944,21 @@ public:
 //     */
 //    std::future<std::unique_ptr<std::ostream>> saveToXmlFile(std::unique_ptr<std::ostream> file) const;
 
-    /** @brief Reads in a KDBX file headers from \p file.
+    /** @brief Reads in a KDBX file headers from file.
+     * @param filename Name of file to be opened.
+     *
+     * This method reads headers of a KDBX-formated input and returns a File object
+     * that can be used in order to deserialize database object.
+     */
+    static File loadFromFile(const std::string& filename);
+
+    /** @brief Reads in a KDBX file headers from an \p istream object.
      * @param file Owning pointer to an istream object that is to be read.
      *
      * This method reads headers of a KDBX-formated input and returns a File object
      * that can be used in order to deserialize database object.
      */
-    static File loadFromFile(std::unique_ptr<std::istream> file);
+    static File loadFromStream(std::unique_ptr<std::istream> file);
 
     /** @brief This method is necesary to initialize some external libraries used
                When serializing and deserializing datbases.
@@ -1866,19 +1967,31 @@ public:
     static void init() noexcept;
 private:
 
+    Icon addIcon(CustomIcon::Ptr icon, DatabaseModel* model);
+    bool removeIcon(size_t index, DatabaseModel* model);
+
+    void insertIcon(CustomIcon::Ptr icon);
+    void eraseIcon(size_t index);
+
+    void refIcon(const CustomIcon::Ptr& icon);
+    void unrefIcon(const CustomIcon::Ptr& icon);
+
     Group::Ptr froot;
     std::map<Uuid, time_t> fdeletedObjects;
     Settings::Ptr fsettings;
-    CustomIcons fcustomIcons;
-    SafeVector<uint8_t> compositeKey;
+    std::vector<std::pair<CustomIcon::Ptr, size_t>> fcustomIcons;
+    CompositeKey fcompositeKey;
 
     Group* frecycleBin;
     Group* ftemplates;
     std::time_t frecycleBinChanged;
     std::time_t ftemplatesChanged;
+    std::time_t fcompositeKeyChanged;
+
 
     std::map<std::string, std::string> customData;
 
+    friend class DatabaseModel;
     friend class Internal::Parser<Database>;
     friend class Internal::Parser<Meta>;
     friend class Group;

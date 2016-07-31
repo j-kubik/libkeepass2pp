@@ -22,6 +22,8 @@ along with libkeepass2pp.  If not, see <http://www.gnu.org/licenses/>.
 #include "pipeline.h"
 #include "platform.h"
 
+namespace Kdbx{
+
 //ToDo:: istream is inherently blocking. Is this a problem?
 /** @brief Pipeline link that takes ownership of an istream object.
  *
@@ -303,7 +305,7 @@ private:
 };
 
 
-
+}
 
 
 

@@ -33,6 +33,8 @@ along with libkeepass2pp.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "libkeepass2pp/keepass2pp_config.h"
 
+namespace Kdbx{
+
 #ifdef _WIN32
     typedef SYSTEMTIME DateTimeStruct;
 #elif KEEPASS2PP_HAVE_STRPTIME
@@ -187,7 +189,7 @@ public:
 };
 
 
-  
+}
 
 
 

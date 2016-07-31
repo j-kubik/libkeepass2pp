@@ -29,6 +29,7 @@ along with libkeepass2pp.  If not, see <http://www.gnu.org/licenses/>.
 #include "../include/libkeepass2pp/wrappers.h"
 #include "../include/libkeepass2pp/links.h"
 
+using namespace Kdbx;
 
 void IStreamLink::runThread(){
     if (!ffile){
@@ -473,6 +474,7 @@ void InflateLink::runThread(){
 
     finish();
 }
+
 
 //-------------------------------------------------------------------------------------
 

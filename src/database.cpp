@@ -20,19 +20,38 @@ along with libkeepass2pp.  If not, see <http://www.gnu.org/licenses/>.
 
 namespace Kdbx{
 
-static inline Kdbx::Icon insertIcon(Kdbx::Icon icon, Kdbx::Database* database){
-    if (icon.type() == Icon::Type::Custom){
-        return database->addCustomIcon(icon.custom());
-    }
-    return icon;
+//------------------------------------------------------------------------------
+
+//static inline Kdbx::Icon insertIcon(Kdbx::Icon icon, Kdbx::Database* database){
+//    if (icon.type() == Icon::Type::Custom){
+//        return database->addCustomIcon(icon.custom());
+//    }
+//    return icon;
+//}
+
+//static inline Kdbx::Icon insertIcon(Kdbx::Icon icon, Kdbx::Database* database, DatabaseModel* model){
+//    unused(database);
+//    if (icon.type() == Icon::Type::Custom){
+//        return model->addCustomIcon(icon.custom());
+//    }
+//    return icon;
+//}
+
+static inline void dropGroups(Kdbx::Database::Group* group,
+                              Kdbx::Database* database){
+    if (database->recycleBin() == group)
+        database->setRecycleBin(nullptr);
+    if (database->templates() == group)
+        database->setTemplates(nullptr);
 }
 
-static inline Kdbx::Icon insertIcon(Kdbx::Icon icon, Kdbx::Database* database, DatabaseModel* model){
-    unused(database);
-    if (icon.type() == Icon::Type::Custom){
-        return model->addCustomIcon(icon.custom());
-    }
-    return icon;
+static inline void dropGroups(Kdbx::Database::Group* group,
+                              Kdbx::Database* database,
+                              DatabaseModel* model){
+    if (database->recycleBin() == group)
+        model->setRecycleBin(nullptr);
+    if (database->templates() == group)
+        model->setTemplates(nullptr);
 }
 
 //------------------------------------------------------------------------------
@@ -64,8 +83,18 @@ void Database::Settings::setDefaultUsername(std::string username) noexcept{
 //------------------------------------------------------------------------------
 
 template <typename ...Args>
-void Database::Version::setDatabase(Database* database, Args... args){
-    icon = insertIcon(icon, database, args...);
+void Database::Version::setDatabase(Args... args){
+    Database* db = parent()->parent()->database();
+    if (icon.type() == Icon::Type::Custom){
+        icon = db->addIcon(icon.custom(), args...);
+        db->refIcon(icon.custom());
+    }
+}
+
+void Database::Version::clearDatabase(){
+    if (icon.type() == Icon::Type::Custom){
+        parent()->parent()->database()->unrefIcon(icon.custom());
+    }
 }
 
 size_t Database::Version::index() const noexcept{
@@ -94,44 +123,52 @@ Database::Entry::Entry(const Entry& entry)
 }
 
 void Database::Entry::addVersion(Version::Ptr version, size_t index){
+    Version* tmp = version.get();
     version->fparent = this;
-
-    if (parent() && parent()->fdatabase)
-        version->setDatabase(parent()->fdatabase);
     fversions.insert(fversions.begin()+index, std::move(version));
+    if (fparent && fparent->database())
+        tmp->setDatabase();
 }
 
 void Database::Entry::addVersion(Version::Ptr version, size_t index, DatabaseModel* model){
+    Version* tmp = version.get();
     version->fparent = this;
-    version->setDatabase(fparent->fdatabase, model);
-
     fversions.insert(fversions.begin()+index, std::move(version));
+    tmp->setDatabase(model);
 }
 
 Database::Version::Ptr Database::Entry::takeVersion(size_t index) noexcept{
     assert(fversions.size() > 1);
-    Version::Ptr result = std::move(fversions.at(index));
+
+    if (fparent && fparent->database())
+        fversions[index].get()->clearDatabase();
+
+    Version::Ptr result = std::move(fversions[index]);
     fversions.erase(fversions.begin() + index);
     result->fparent = 0;
     return result;
 }
 
-void Database::Entry::clearDatabase(){
-    fparent->fdatabase->fdeletedObjects[fuuid] = time(nullptr);
+template <typename ...Args>
+void Database::Entry::setDatabase(Args... args){
+    Database* db = parent()->database();
+
+    auto del = db->fdeletedObjects.find(fuuid);
+    if (del != db->fdeletedObjects.end()){
+        db->fdeletedObjects.erase(del);
+    }
+
+    for (const Version::Ptr& v: fversions){
+        v->setDatabase(args...);
+    }
+
 }
 
-template <typename ...Args>
-void Database::Entry::setDatabase(Database* database, Args... args){
-
-    auto del = database->fdeletedObjects.find(fuuid);
-    if (del != database->fdeletedObjects.end()){
-        database->fdeletedObjects.erase(del);
+void Database::Entry::clearDatabase(){
+    for (const Version::Ptr& v: fversions){
+        v->clearDatabase();
     }
-
-    for (const Version::Ptr& version: fversions){
-        version->setDatabase(database, args...);
-    }
-
+    fparent->fdatabase->fdeletedObjects[fuuid] = time(nullptr);
 }
 
 //-----------------------------------------------------------------------------------
@@ -158,8 +195,25 @@ Database::Group::Group(const Group& group)
     }
 }
 
+Database::Group::Properties::Ptr Database::Group::setProperties(Properties::Ptr properties){
+
+    if (fdatabase){
+        if (properties->icon.type() == Icon::Type::Custom){
+            properties->icon = fdatabase->addIcon(properties->icon.custom());
+            fdatabase->refIcon(properties->icon.custom());
+        }
+        if (fproperties->icon.type() == Icon::Type::Custom){
+            fdatabase->unrefIcon(fproperties->icon.custom());
+        }
+    }
+
+    using std::swap;
+    swap(fproperties, properties);
+    return properties;
+}
+
 bool Database::Group::ancestor(const Group* group) const noexcept{
-    const Group* g = parent();
+    const Group* g = this;
     while (g){
         if (g == group)
             return true;
@@ -191,18 +245,20 @@ void Database::Group::addGroup(Group::Ptr group, size_t index){
     assert(group->fparent == nullptr);
 
     group->fparent = this;
-    if (fdatabase)
-        group->setDatabase(fdatabase);
     fgroups.insert(fgroups.begin()+index, std::move(group));
+
+    if (fdatabase)
+        fgroups[index]->setDatabase();
 }
 
 Database::Group::Ptr Database::Group::takeGroup(size_t index) noexcept{
     assert(index < groups());
+    if (fdatabase)
+        fgroups[index]->clearDatabase();
 
-    Group::Ptr result(std::move(fgroups.at(index)));
+    Group::Ptr result(std::move(fgroups[index]));
     fgroups.erase(fgroups.begin()+index);
     result->fparent = nullptr;
-    result->clearDatabase();
     return result;
 }
 
@@ -226,18 +282,18 @@ void Database::Group::moveGroup(size_t index, Group* newParent, size_t newIndex)
 
 void Database::Group::addEntry(Entry::Ptr entry, size_t index){
     entry->fparent = this;
-    if (fdatabase)
-        entry->setDatabase(fdatabase);
     fentries.insert(fentries.begin()+index, std::move(entry));
+    if (fdatabase)
+        fentries[index]->setDatabase();
 }
 
 Database::Entry::Ptr Database::Group::takeEntry(size_t index) noexcept{
-    Entry::Ptr result(std::move(fentries.at(index)));
+
+    if (fdatabase)
+        fentries[index]->clearDatabase();
+    Entry::Ptr result(std::move(fentries[index]));
     fentries.erase(fentries.begin()+ index);
     result->fparent = nullptr;
-    if (fdatabase)
-        result->clearDatabase();
-
     return result;
 }
 
@@ -258,44 +314,52 @@ void Database::Group::moveEntry(size_t index, Group* newParent, size_t newIndex)
     newParent->fentries.insert(newParent->fentries.begin()+newIndex, std::move(entry));
 }
 
-void Database::Group::clearDatabase() noexcept{
+template <typename ...Args>
+void Database::Group::setDatabase(Args... args){
+    assert(fdatabase == nullptr);
+    assert(fparent != nullptr);
+    assert(fparent->fdatabase != nullptr);
+    fdatabase = fparent->fdatabase;
+
+    auto del = fdatabase->fdeletedObjects.find(fuuid);
+    if (del != fdatabase->fdeletedObjects.end()){
+        fdatabase->fdeletedObjects.erase(del);
+    }
+
+    if (fproperties->icon.type() == Icon::Type::Custom){
+        fproperties->icon = fdatabase->addIcon(fproperties->icon.custom(), args...);
+        fdatabase->refIcon(fproperties->icon.custom());
+    }
+
+    for (const Entry::Ptr& entry: fentries){
+        entry->setDatabase(args...);
+    }
+
+    for (const Group::Ptr& group: fgroups){
+        group->setDatabase(args...);
+    }
+}
+
+template <typename ...Args>
+void Database::Group::clearDatabase(Args... args) noexcept{
     assert(fdatabase != nullptr);
 
     for (const Entry::Ptr& entry: fentries)
         entry->clearDatabase();
 
     for (const Group::Ptr& group: fgroups)
-        group->clearDatabase();
+        group->clearDatabase(args...);
 
-    if (fdatabase->recycleBin() == this)
-        fdatabase->setRecycleBin(nullptr);
-    if (fdatabase->templates() == this)
-        fdatabase->setTemplates(nullptr);
+    dropGroups(this, fdatabase, args...);
 
+    if (fproperties->icon.type() == Icon::Type::Custom){
+        fdatabase->unrefIcon(fproperties->icon.custom());
+    }
     fdatabase->fdeletedObjects[fuuid] = time(nullptr);
     fdatabase = nullptr;
 }
 
-template <typename ...Args>
-void Database::Group::setDatabase(Database* database, Args... args){
-    assert(fdatabase == nullptr);
-    fdatabase = database;
 
-    auto del = database->fdeletedObjects.find(fuuid);
-    if (del != database->fdeletedObjects.end()){
-        database->fdeletedObjects.erase(del);
-    }
-
-    fproperties->icon = insertIcon(fproperties->icon, database, args...);
-
-    for (const Entry::Ptr& entry: fentries){
-        entry->setDatabase(database, args...);
-    }
-
-    for (const Group::Ptr& group: fgroups){
-        group->setDatabase(database, args...);
-    }
-}
 
 Database::Group* Database::Group::groupLookup(const Uuid& uuid) const noexcept{
     for (const Ptr& group: fgroups){
@@ -325,24 +389,58 @@ Database::Entry* Database::Group::entryLookup(const Uuid& uuid) const noexcept{
 void Database::Group::addGroup(Group::Ptr group, size_t index, DatabaseModel* model){
     assert(index <= groups());
     assert(group->fparent == nullptr);
+
+    Group* tmp = group.get();
     group->fparent = this;
-    group->setDatabase(fdatabase, model);
     fgroups.insert(fgroups.begin()+index, std::move(group));
+    tmp->setDatabase(model);
+}
+
+Database::Group::Ptr Database::Group::takeGroup(size_t index, DatabaseModel* model){
+    assert(index < groups());
+
+    fgroups[index]->clearDatabase(model);
+    Group::Ptr result(std::move(fgroups[index]));
+    fgroups.erase(fgroups.begin()+index);
+    result->fparent = nullptr;
+    return result;
 }
 
 void Database::Group::addEntry(Entry::Ptr entry, size_t index, DatabaseModel* model){
     assert(index <= entries());
     assert(entry->fparent == nullptr);
+    Entry* tmp = entry.get();
     entry->fparent = this;
     fentries.insert(fentries.begin()+index, std::move(entry));
-    entry->setDatabase(fdatabase, model);
+    tmp->setDatabase(model);
 }
+
+
+Database::Group::Properties::Ptr Database::Group::setProperties(Properties::Ptr properties, DatabaseModel* model){
+
+    if (fdatabase){
+        if (properties->icon.type() == Icon::Type::Custom){
+            properties->icon = model->addIcon(properties->icon.custom());
+            fdatabase->refIcon(properties->icon.custom());
+        }
+        if (fproperties->icon.type() == Icon::Type::Custom){
+            fdatabase->unrefIcon(fproperties->icon.custom());
+        }
+    }
+
+    using std::swap;
+    swap(fproperties, properties);
+    return properties;
+}
+
+
 
 //-------------------------------------------------------------------------------------
 
-Database::Database()
+Database::Database(CompositeKey key)
     :froot(new Group(this)),
       fsettings(new Settings()),
+      fcompositeKey(std::move(key)),
       frecycleBin(nullptr),
       ftemplates(nullptr)
 {
@@ -350,9 +448,9 @@ Database::Database()
     fsettings->fnameChanged = currentTime;
     fsettings->fdescriptionChanged = currentTime;
     fsettings->fdefaultUsernameChanged = currentTime;
-    fsettings->masterKeyChanged = currentTime;
     frecycleBinChanged = currentTime;
     ftemplatesChanged = currentTime;
+    fcompositeKeyChanged = currentTime;
 }
 
 void Database::setRecycleBin(const Group* bin, std::time_t changed) noexcept{
@@ -371,34 +469,133 @@ void Database::setTemplates(const Group* templ, std::time_t changed) noexcept{
     }
 }
 
-int Database::customIconIndex(const Uuid& uuid) const noexcept{
-    for (unsigned int i=0; i<fcustomIcons.size(); ++i){
-        if (fcustomIcons.at(i)->uuid() == uuid){
+CompositeKey Database::setCompositeKey(CompositeKey key, std::time_t changed) noexcept{
+    using std::swap;
+    swap(fcompositeKey, key);
+    fcompositeKeyChanged = changed;
+    return std::move(key);
+}
+
+//------ Custom icons functions ------
+
+
+CustomIcon::Ptr Database::icon(const Uuid& uuid) const noexcept{
+    int index = iconIndex(uuid);
+    if (index < 0)
+        return nullptr;
+    return fcustomIcons[index].first;
+}
+
+int Database::iconIndex(const Uuid& uuid) const noexcept{
+    for (size_t i=0; i<fcustomIcons.size(); ++i){
+        if (fcustomIcons[i].first->uuid() == uuid)
             return i;
-        }
     }
     return -1;
 }
 
-Icon Database::icon(Uuid cicon, StandardIcon sicon) const noexcept{
+int Database::iconIndex(const CustomIcon::Ptr& icon) const noexcept{
+    for (size_t i=0; i<fcustomIcons.size(); ++i){
+        if (fcustomIcons[i].first == icon ||
+            fcustomIcons[i].first->uuid() == icon->uuid())
+            return i;
+    }
+    return -1;
+}
+
+Icon Database::addIcon(CustomIcon::Ptr icon){
+    int index = iconIndex(icon);
+    if (index < 0){
+        insertIcon(icon);
+        return Icon(std::move(icon));
+    }
+    return Icon(fcustomIcons[index].first);
+}
+
+Icon Database::addIcon(const Icon& icon){
+    if (icon.type() == Icon::Type::Custom)
+        return addIcon(icon.custom());
+    return icon;
+}
+
+bool Database::removeIcon(size_t index){
+    if (fcustomIcons[index].second == 0){
+        eraseIcon(index);
+        return true;
+    }
+    return false;
+}
+
+bool Database::removeIcon(const CustomIcon::Ptr& icon){
+    int index = iconIndex(icon);
+    if (index < 0)
+        return false;
+    return removeIcon(index);
+}
+
+bool Database::removeIcon(const Icon& icon){
+    if (icon.type() == Icon::Type::Custom)
+        return removeIcon(icon.custom());
+    return false;
+}
+
+Icon Database::icon(const Uuid& cicon, StandardIcon sicon) const noexcept{
     if (cicon){
-        int index = customIconIndex(std::move(cicon));
+        int index = iconIndex(cicon);
         if (index >= 0)
-            return Icon(customIcon(index));
+            return Icon(icon(index));
     }
     return Icon(sicon);
 }
 
-Icon Database::addCustomIcon(CustomIcon::Ptr icon){
-    for (const CustomIcon::Ptr& i: fcustomIcons) {
-        if (i == icon || i->uuid() == icon->uuid())
-            return Icon(i);
+Icon Database::addIcon(CustomIcon::Ptr icon, DatabaseModel* model){
+    int index = iconIndex(icon);
+    if (index < 0){
+        model->insertIcon(icon);
+        return Icon(std::move(icon));
     }
-    fcustomIcons.push_back(icon);
-    return Icon(std::move(icon));
+    return Icon(fcustomIcons[index].first);
+}
+
+bool Database::removeIcon(size_t index, DatabaseModel* model){
+    if (fcustomIcons[index].second == 0)
+        return false;
+    model->eraseIcon(index);
+    return true;
+}
+
+void Database::insertIcon(CustomIcon::Ptr icon){
+    assert(iconIndex(icon) < 0);
+    fcustomIcons.emplace_back(std::pair<CustomIcon::Ptr, size_t>(icon, 0));
+}
+
+void Database::eraseIcon(size_t index){
+    assert(index < fcustomIcons.size());
+    assert(fcustomIcons[index].second == 0);
+    fcustomIcons.erase(fcustomIcons.begin()+index);
+}
+
+void Database::refIcon(const CustomIcon::Ptr& icon){
+    int index = iconIndex(icon);
+    assert(index >= 0);
+    fcustomIcons[index].second++;
+}
+
+void Database::unrefIcon(const CustomIcon::Ptr& icon){
+    int index = iconIndex(icon);
+    assert(index >= 0);
+    fcustomIcons[index].second--;
 }
 
 //-------------------------------------------------------------------------------------
+
+void DatabaseModel::insertIcon(CustomIcon::Ptr icon){
+    getDatabase()->insertIcon(std::move(icon));
+}
+
+void DatabaseModel::eraseIcon(size_t index){
+    getDatabase()->eraseIcon(index);
+}
 
 }
 

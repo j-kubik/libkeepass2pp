@@ -404,16 +404,6 @@ public:
         return get()->templatesChanged();
     }
 
-    virtual inline Icon addCustomIcon(CustomIcon::Ptr ptr){
-        return getDatabase()->addCustomIcon(std::move(ptr));
-    }
-
-    inline Icon addCustomIcon(const Icon& icon){
-        if (icon.type() == Icon::Type::Custom)
-            return addCustomIcon(icon.custom());
-        return icon;
-    }
-
     virtual inline void setProperties(const Database::Group* group, Database::Group::Properties::Ptr properties) {
         const_cast<Database::Group*>(group)->setProperties(std::move(properties));
     }
@@ -467,6 +457,36 @@ public:
         return static_cast<const Database::Group*>(raw);
     }
 
+    // --------- Custom icon methods ----------------
+
+    inline Icon addIcon(const CustomIcon::Ptr& icon){
+        return getDatabase()->addIcon(icon, this);
+    }
+
+    inline Icon addIcon(Icon icon){
+        if (icon.type() == Icon::Type::Custom){
+            return addIcon(icon.custom());
+        }
+        return icon;
+    }
+
+    inline bool removeIcon(size_t index){
+        return getDatabase()->removeIcon(index, this);
+    }
+
+    inline bool removeIcon(const CustomIcon::Ptr& icon){
+        int index = getDatabase()->iconIndex(icon);
+        if (index < 0)
+            return false;
+        return removeIcon(index);
+    }
+
+    inline bool removeIcon(const Icon& icon){
+        if (icon.type() == Icon::Type::Custom)
+            return removeIcon(icon.custom());
+        return false;
+    }
+
 protected:
 
     virtual Database* getDatabase() const noexcept =0;
@@ -499,6 +519,10 @@ protected:
         return group->takeEntry(index);
     }
 
+    virtual inline void moveEntry(Database::Group* oldParent, size_t oldIndex, Database::Group* newParent, size_t newIndex){
+        oldParent->moveEntry(oldIndex, newParent, newIndex);
+    }
+
     virtual inline Database::Group* addGroup(Database::Group* parent, Database::Group::Ptr group, size_t index) {
         Database::Group* result = group.get();
         parent->addGroup(std::move(group), index, this);
@@ -512,6 +536,13 @@ protected:
     virtual inline Database::Group::Ptr takeGroup(Database::Group* parent, size_t index) {
         return parent->takeGroup(index);
     }
+
+    virtual inline void moveGroup(Database::Group* oldParent, size_t oldIndex, Database::Group* newParent, size_t newIndex){
+        oldParent->moveGroup(oldIndex, newParent, newIndex);
+    }
+
+    virtual void insertIcon(CustomIcon::Ptr icon);
+    virtual void eraseIcon(size_t index);
 
 protected:
 
@@ -541,6 +572,7 @@ protected:
         settings = getDatabase()->setSettings(std::move(settings));
     }
 
+    friend class Database;
 };
 
 template <typename ModelType>

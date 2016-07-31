@@ -35,6 +35,8 @@ along with libkeepass2pp.  If not, see <http://www.gnu.org/licenses/>.
 #include "../include/libkeepass2pp/platform.h"
 #include "../include/libkeepass2pp/util.h"
 
+namespace Kdbx{
+
 //static const uint64_t t1970 = 0x19db1ded53e8000;
 
 template <unsigned int size>
@@ -209,7 +211,7 @@ SafeVector<uint8_t> ProtectedBuffer::toBuffer(){
 
 //------------------------------------------------------------------------------------------------------------
 
-
+}
 
 
 

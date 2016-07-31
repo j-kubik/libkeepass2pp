@@ -24,9 +24,11 @@ along with libkeepass2pp.  If not, see <http://www.gnu.org/licenses/>.
 #include "../include/libkeepass2pp/keepass2pp_config.h"
 #include "../include/libkeepass2pp/wrappers.h"
 
+namespace Kdbx{
+
 namespace OSSL{
 
-void exception::clearErrors(){
+void Kdbx::OSSL::exception::clearErrors(){
     ERR_clear_error();
 }
 
@@ -1377,6 +1379,13 @@ int IstreamInput::read(char* buffer, int len){
 
 void IstreamInput::close(){} // Does nothing, it's owner's responsibility to close a stream.
 
+int OstreamOutput::write(const char* buffer, int len){
+    stream.write(buffer, len);
+    return len;
+}
+
+void OstreamOutput::close(){}
+
 }
 
 //------------------------------------------------------------------------------
@@ -1621,6 +1630,8 @@ SafeVector<uint8_t> Deflater::oneShot(const SafeVector<uint8_t>& input,
 
     result.insert(result.end(), output.begin(), output.begin() + (output.size() - strm->avail_out));
     return result;
+}
+
 }
 
 }

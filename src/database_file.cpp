@@ -18,6 +18,7 @@ along with libkeepass2pp.  If not, see <http://www.gnu.org/licenses/>.
 #include <bitset>
 #include <functional>
 #include <utility>
+#include <fstream>
 
 #include <openssl/sha.h>
 #include <openssl/evp.h>
@@ -27,6 +28,8 @@ along with libkeepass2pp.  If not, see <http://www.gnu.org/licenses/>.
 #include "../include/libkeepass2pp/links.h"
 #include "../include/libkeepass2pp/util.h"
 #include "../include/libkeepass2pp/cryptorandom.h"
+#include "../include/libkeepass2pp/pipeline.h"
+
 
 namespace Kdbx{
 
@@ -60,8 +63,9 @@ public:
     Uuid templatesUUID;
     std::time_t recycleBinChanged;
     std::time_t templatesChanged;
+    std::time_t compositeKeyChanged;
     std::array<uint8_t, 32> headerHash; // ToDo: make use of this field...
-    CustomIcons customIcons;
+    std::vector<std::pair<CustomIcon::Ptr, size_t>> customIcons;
     std::map<std::string, std::string> customData;
     std::map<std::string, std::shared_ptr<SafeVector<uint8_t>>> binaries;
 };
@@ -317,14 +321,16 @@ private:
     std::size_t currentPos;
 
     Database::File::Settings fileSettings;
+    CompositeKey fcompositeKey;
     SafeVector<uint8_t> fprotectedStreamKey;
 
     std::promise<Database::Ptr> finishedPromise;
 public:
 
-    inline XmlReaderLink(const Database::File::Settings& settings, const SafeVector<uint8_t>& protectedStreamKey) noexcept
+    inline XmlReaderLink(const Database::File::Settings& settings, const SafeVector<uint8_t>& protectedStreamKey, CompositeKey compositeKey = CompositeKey()) noexcept
         :currentPos(0),
           fileSettings(settings),
+          fcompositeKey(std::move(compositeKey)),
           fprotectedStreamKey(std::move(protectedStreamKey))
     {}
 
@@ -450,8 +456,8 @@ class Time;
 template <> class Parser<Time>;
 class Tags;
 template <> class Parser<Tags>;
-template <> class Parser<CustomIcon::Ptr>;
-template <> class Parser<CustomIcons>;
+template <> class Parser<CustomIcon>;
+template <> class Parser<std::vector<std::pair<CustomIcon::Ptr, size_t>>>;
 template <> class Parser<MemoryProtectionFlags>;
 template <> class Parser<Database::Meta::Binary>;
 template <> class Parser<Database::Meta::Binaries>;
@@ -997,13 +1003,15 @@ public:
 };
 
 template <>
-class Parser<CustomIcon::Ptr>: public TagParser<Parser<CustomIcon::Ptr>, CustomIcon::Ptr>{
+class Parser<CustomIcon>: public TagParser<Parser<CustomIcon>, CustomIcon::Ptr>{
 private:
     bool haveUuid;
     bool haveData;
     Uuid uuid;
     std::vector<uint8_t> data;
 public:
+    typedef CustomIcon::Ptr WrittenType;
+
     inline Parser() noexcept
         :haveUuid(false),
           haveData(false)
@@ -1040,10 +1048,33 @@ public:
 };
 
 template <>
-class Parser<CustomIcons>: public VectorTagParser<Parser<CustomIcons>, CustomIcon::Ptr>{
+class Parser<std::vector<std::pair<CustomIcon::Ptr, size_t>>>: public TagParser<Parser<std::vector<std::pair<CustomIcon::Ptr, size_t>>>, std::vector<std::pair<CustomIcon::Ptr, size_t>>>{
+private:
+    std::vector<std::pair<CustomIcon::Ptr, size_t>> data;
 public:
-    typedef CustomIcon::Ptr ItemType;
-    static constexpr const char* itemTagName = String::CustomIconItem;
+
+    bool tag(XmlReader& reader){
+
+        std::string localName = reader.localName();
+        if (localName == String::CustomIconItem){
+            data.emplace_back(parse<CustomIcon>(reader), 0);
+        }else{
+            return false;
+        }
+        return true;
+
+    }
+
+    inline std::vector<std::pair<CustomIcon::Ptr, size_t>> takeResult(){
+        return std::move(data);
+    }
+
+    static void writeOld(XmlWriter& writer, const std::vector<std::pair<CustomIcon::Ptr, size_t>>& value){
+        for (const std::pair<CustomIcon::Ptr, size_t>& item: value){
+            writer.writeElement<CustomIcon>(String::CustomIconItem, item.first);
+        }
+    }
+
 };
 
 
@@ -1346,7 +1377,7 @@ public:
         }else if (localName == String::DbColor){
             data.settings->color = parse<std::string>(reader);
         }else if (localName == String::DbKeyChanged){
-            data.settings->masterKeyChanged = parse<Time>(reader);
+            data.compositeKeyChanged = parse<Time>(reader);
         }else if (localName == String::DbKeyChangeRec){
             data.settings->masterKeyChangeRec = parse<int64_t>(reader);
         }else if (localName == String::DbKeyChangeForce){
@@ -1354,7 +1385,7 @@ public:
         }else if (localName == String::MemoryProt){
             data.settings->memoryProtection = parse<MemoryProtectionFlags>(reader);
         }else if (localName == String::CustomIcons){
-            data.customIcons = parse<CustomIcons>(reader);
+            data.customIcons = parse<std::vector<std::pair<CustomIcon::Ptr, size_t>>>(reader);
         }else if (localName == String::RecycleBinEnabled){
             data.settings->recycleBinEnabled = parse<bool>(reader);
         }else if (localName == String::RecycleBinUuid){
@@ -1403,7 +1434,7 @@ public:
         writer.writeElement<Time>(String::DbDefaultUserChanged, settings.defaultUsernameChanged());
         writer.writeElement(String::DbMntncHistoryDays, settings.maintenanceHistoryDays);
         writer.writeElement(String::DbColor, settings.color);
-        writer.writeElement<Time>(String::DbKeyChanged, settings.masterKeyChanged);
+        writer.writeElement<Time>(String::DbKeyChanged, data->compositeKeyChanged());
         writer.writeElement(String::DbKeyChangeRec, settings.masterKeyChangeRec);
         writer.writeElement(String::DbKeyChangeForce, settings.masterKeyChangeForce);
         writer.writeElement(String::MemoryProt, settings.memoryProtection);
@@ -1668,16 +1699,20 @@ public:
     }
 
     inline Database::Version::Ptr takeResult(){
-        if (customIcon != Uuid::nil()){
-            for (const CustomIcon::Ptr& icon: meta.customIcons){
-                if(icon->uuid() == customIcon){
-                    version->icon = Icon(icon);
-                    return std::move(version);
-                }
+
+        CustomIcon::Ptr icon;
+        for (auto& ic: meta.customIcons){
+            if (ic.first->uuid() == customIcon){
+                icon = ic.first;
+                break;
             }
         }
 
-        version->icon = Icon(standardIcon);
+        if (icon){
+            version->icon = Icon(std::move(icon));
+        }else{
+            version->icon = Icon(standardIcon);
+        }
         return std::move(version);
     }
 
@@ -1837,16 +1872,20 @@ public:
         if (!haveUuid)
             data->fuuid = Uuid::generate();
 
-        if (customIcon != Uuid::nil()){
-            for (const CustomIcon::Ptr& icon: meta.customIcons){
-                if(icon->uuid() == customIcon){
-                    data->fproperties->icon = Icon(icon);
-                    return std::move(data);
-                }
+        CustomIcon::Ptr icon;
+        for (auto& ic: meta.customIcons){
+            if (ic.first->uuid() == customIcon){
+                icon = ic.first;
+                break;
             }
         }
 
-        data->fproperties->icon = Icon(standardIcon);
+        if (icon){
+            data->fproperties->icon = Icon(std::move(icon));
+        }else{
+            data->fproperties->icon = Icon(standardIcon);
+        }
+
         return std::move(data);
     }
 
@@ -1999,8 +2038,8 @@ public:
 
     typedef const Database* WrittenType;
 
-    Parser(const Database::File::Settings& settings)
-        :database(new Database()),
+    Parser(const Database::File::Settings& settings, CompositeKey compositeKey)
+        :database(new Database(std::move(compositeKey))),
           settings(settings)
     {}
 
@@ -2026,6 +2065,7 @@ public:
         database->ftemplates = database->group(meta.templatesUUID);
         database->frecycleBinChanged = meta.recycleBinChanged;
         database->ftemplatesChanged = meta.templatesChanged;
+        database->fcompositeKeyChanged = meta.compositeKeyChanged;
         database->fsettings = std::move(meta.settings);
         database->customData = std::move(meta.customData);
         database->fcustomIcons = std::move(meta.customIcons);
@@ -2057,7 +2097,7 @@ void XmlReaderLink::runThread(){
         if (type != XML_READER_TYPE_ELEMENT || reader.localName() != String::DocNode)
             throw std::runtime_error("Bad stream format.");
 
-        finishedPromise.set_value(parse<Database>(reader, fileSettings));
+        finishedPromise.set_value(parse<Database>(reader, fileSettings, std::move(fcompositeKey)));
     }catch(UnhashStreamLink::BadHeader&){
         finishedPromise.set_exception(std::make_exception_ptr(std::runtime_error("Incorrect composed key.")));
         throw;
@@ -2108,7 +2148,7 @@ static void writeHeader(OSSL::Digest& d, std::ostream* file, Internal::HeaderFie
     d.update(data, size);
 }
 
-std::future<std::unique_ptr<std::ostream>> Database::saveToFile(std::unique_ptr<std::ostream> file, const CompositeKey& key) const{
+std::unique_ptr<std::ostream> Database::saveToFile(std::unique_ptr<std::ostream> file) const{
     using namespace Internal;
     file->exceptions ( std::istream::failbit | std::istream::badbit | std::istream::eofbit );
 
@@ -2167,7 +2207,7 @@ std::future<std::unique_ptr<std::ostream>> Database::saveToFile(std::unique_ptr<
 
         OSSL::Digest keyHash(EVP_sha256());
         keyHash.update(masterSeed.data(), masterSeed.size());
-        SafeVector<uint8_t> hash = key.getCompositeKey(transformSeed, settings.transformRounds);
+        SafeVector<uint8_t> hash = fcompositeKey.getCompositeKey(transformSeed, settings.transformRounds);
         if (hash.size() != 32){
             std::ostringstream s;
             s << "Composed key has wrong size: " << hash.size() << "\nThis should not have happened.";
@@ -2207,11 +2247,17 @@ std::future<std::unique_ptr<std::ostream>> Database::saveToFile(std::unique_ptr<
     std::future<std::unique_ptr<std::ostream>> result = finish->getFuture();
     pipeline.setFinish(std::move(finish));
 
-
-
     pipeline.run();
-    return result;
+    return result.get();
 }
+
+void Database::saveToFile(const std::string& filename) const{
+    std::unique_ptr<std::ofstream> file(new std::ofstream());
+    file->exceptions ( std::ios::failbit | std::ios::badbit | std::ios::eofbit );
+    file->open(filename, std::ios::out | std::ios::trunc );
+    saveToFile(std::move(file));
+}
+
 
 /*std::future<std::unique_ptr<std::ostream>> Database::saveToXmlFile(std::unique_ptr<std::ostream> file) const{
     using namespace Internal;
@@ -2252,7 +2298,14 @@ static void checkHeader(std::istream* file){
         throw std::runtime_error("File version is newer than supported.");
 }
 
-Database::File Database::loadFromFile(std::unique_ptr<std::istream> file){
+Database::File Database::loadFromFile(const std::string& filename){
+    std::unique_ptr<std::ifstream> file(new std::ifstream());
+    file->exceptions ( std::istream::failbit | std::istream::badbit | std::istream::eofbit );
+    file->open(filename);
+    return loadFromStream(std::move(file));
+}
+
+Database::File Database::loadFromStream(std::unique_ptr<std::istream> file){
 
     using namespace Internal;
     file->exceptions ( std::istream::failbit | std::istream::badbit | std::istream::eofbit );
@@ -2378,18 +2431,18 @@ Database::File Database::loadFromFile(std::unique_ptr<std::istream> file){
 
 }
 
-
-bool Database::File::needsKey(){
-    return settings.encrypt;
+bool Database::File::Settings::needsKey()const noexcept{
+    return encrypt;
 }
 
-std::future<Database::Ptr> Database::File::getDatabase(const CompositeKey& key){
+
+bool Database::File::needsKey(){
+    return settings.needsKey();
+}
+
+std::future<Database::Ptr> Database::File::getDatabase(CompositeKey compositeKey){
 
     using namespace Internal;
-
-    //KdbxRandomStream::Ptr randomStream(KdbxRandomStream::randomStream(KdbxRandomStream::Algorithm(settings.crsAlgorithm), protectedStreamKey));
-    std::unique_ptr<XmlReaderLink> finish(new XmlReaderLink(settings, protectedStreamKey));
-    std::future<Database::Ptr> result(finish->getFuture());
 
     Pipeline pipeline;
     pipeline.setStart(std::unique_ptr<Pipeline::OutLink>(new IStreamLink(std::move(ffile))));
@@ -2398,7 +2451,7 @@ std::future<Database::Ptr> Database::File::getDatabase(const CompositeKey& key){
     if (settings.encrypt){
         OSSL::Digest keyHash(EVP_sha256());
         keyHash.update(masterSeed);
-        SafeVector<uint8_t> hash = key.getCompositeKey(transformSeed, settings.transformRounds);
+        SafeVector<uint8_t> hash = compositeKey.getCompositeKey(transformSeed, settings.transformRounds);
         keyHash.update(hash);
         keyHash.final(hash);
 
@@ -2425,6 +2478,9 @@ std::future<Database::Ptr> Database::File::getDatabase(const CompositeKey& key){
     }
 
     //pipeline.appendLink(std::unique_ptr<Pipeline::InOutLink>(new OStreamTeeLink("outfile.xml")));
+
+    std::unique_ptr<XmlReaderLink> finish(new XmlReaderLink(settings, protectedStreamKey, std::move(compositeKey)));
+    std::future<Database::Ptr> result(finish->getFuture());
     pipeline.setFinish(std::move(finish));
     pipeline.run();
 

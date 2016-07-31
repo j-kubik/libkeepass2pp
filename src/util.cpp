@@ -20,6 +20,7 @@ along with libkeepass2pp.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "../include/libkeepass2pp/util.h"
 
+namespace Kdbx{
 
 std::vector<std::string> explode(const std::string& s, const char* separators){
 
@@ -235,7 +236,7 @@ std::string encodeBase64(const uint8_t* data, std::size_t size){
     return result;
 }
 
-
+}
 
 
 

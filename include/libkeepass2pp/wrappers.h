@@ -39,6 +39,8 @@ along with libkeepass2pp.  If not, see <http://www.gnu.org/licenses/>.
 #include <libxml/xmlreader.h>
 #include <libxml/xmlwriter.h>
 
+namespace Kdbx {
+
 /** @brief Namepsace for OpenSSL library wrappers.
  *
  * These wrappers are thin and do not isolate library user from underlying
@@ -1044,6 +1046,29 @@ public:
     virtual void close();
 };
 
+/** @brief Basic xml output buffer, that uses an ostream object as data sink.*/
+class OstreamOutput: public OutputBufferTextWriter::Output{
+private:
+    std::ostream& stream;
+public:
+
+    /** @brief Constructs IstreamInput.
+     * @param stream Input stream to use as data source.
+     *
+     * IstreamInput doesn't take ownership of stream object. It is up to the
+     * caller to ensure that stream reamins valid as long as IstreamInput
+     * exists.
+     */
+    inline OstreamOutput(std::ostream& stream) noexcept
+        :stream(stream)
+    {}
+
+    /** @brief Overload of OutputBufferTextWriter::Output method. */
+    virtual int write(const char* buffer, int len);
+    /** @brief Overload of OutputBufferTextWriter::Output method. */
+    virtual void close();
+};
+
 } // namespace XML
 
 //---------------------------------------------------------------------------------------
@@ -1239,6 +1264,8 @@ public:
                                        int strategy = Z_DEFAULT_STRATEGY,
                                        AllocType type = AllocType::Default);
 };
+
+}
 
 }
 

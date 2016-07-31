@@ -154,6 +154,45 @@ CompositeKey::Key::Ptr CompositeKey::Key::fromFile(SafeString<char> filename){
     return Key::Ptr(new FileKey(std::move(filename)));
 }
 
+CompositeKey::Key::Ptr CompositeKey::Key::createFile(SafeString<char> filename){
+    std::ofstream keyFile(filename.c_str());
+    if (!keyFile.is_open() || !keyFile.good()){
+        std::stringstream s;
+        s << "Error opening file: '" << filename << "'.";
+        throw std::runtime_error(s.str());
+    }
+
+    try{
+        XML::OstreamOutput xmlOutput(keyFile);
+        XML::OutputBufferTextWriter writer(&xmlOutput);
+
+        writer.writeStartDocument();
+        writer.writeStartElement("KeyFile");
+
+        writer.writeStartElement("Meta");
+        writer.writeStartElement("Version");
+        writer.writeString("1.0");
+        writer.writeEndElement();
+        writer.writeEndElement();
+
+        writer.writeStartElement("Key");
+        writer.writeStartElement("Data");
+        SafeVector<uint8_t> keyData(32);
+        OSSL::rand(keyData);
+        writer.writeBase64(keyData);
+        writer.writeEndElement();
+        writer.writeEndElement();
+
+        writer.writeEndElement();
+
+        return Ptr(new FileKey(std::move(filename)));
+    } catch (std::exception& e){
+        std::stringstream s;
+        s << "Error writing key file: '" << filename << "': " << e.what();
+        throw std::runtime_error(s.str());
+    }
+}
+
 CompositeKey::Key::Ptr CompositeKey::Key::fromBuffer(SafeVector<uint8_t> data){
     return Key::Ptr(new BufferKey(std::move(data)));
 }
